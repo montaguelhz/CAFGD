@@ -8,6 +8,7 @@ const (
 	AssumeTime   = "alibabacloud.com/assume-time"    // To retrieve the scheduling latency
 	CreationTime = "alibabacloud.com/creation-time"  // creation timestamp
 	DeletionTime = "alibabacloud.com/deletion-time"  // deletion timestamp
+	PlanTime     = "plan_time"
 	PodNsNameSep = "/"
 	DevIdSep     = "-"
 	MILLI        = 1000

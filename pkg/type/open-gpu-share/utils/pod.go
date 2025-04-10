@@ -125,6 +125,50 @@ func GetDeletionTimeFromPodAnnotation(p *v1.Pod) (t *time.Time) {
 	return nil
 }
 
+func GetPlanTimeFromPodAnnotation(p *v1.Pod) int {
+	if timeStr, ok := p.Annotations[PlanTime]; ok {
+		t, err := strconv.ParseFloat(timeStr, 64)
+		if err != nil {
+			return 0
+		}
+		return int(t)
+	}
+	return 0
+}
+
+func GetStartTimeFromPodAnnotation(p *v1.Pod) int {
+	if timeStr, ok := p.Annotations["start-time"]; ok {
+		t, err := strconv.ParseFloat(timeStr, 64)
+		if err != nil {
+			return 0
+		}
+		return int(t)
+	}
+	return 0
+}
+
+func GetEndTimeFromPodAnnotation(p *v1.Pod) int {
+	if timeStr, ok := p.Annotations["end-time"]; ok {
+		t, err := strconv.ParseFloat(timeStr, 64)
+		if err != nil {
+			return 0
+		}
+		return int(t)
+	}
+	return 0
+}
+
+func GetNextTimeFromPodAnnotation(p *v1.Pod) int {
+	if timeStr, ok := p.Annotations["next-time"]; ok {
+		t, err := strconv.ParseFloat(timeStr, 64)
+		if err != nil {
+			return 0
+		}
+		return int(t)
+	}
+	return 0
+}
+
 // GpuIdStrToIntList follows the string formed in func (n *GpuNodeInfo) AllocateGpuId
 func GpuIdStrToIntList(id string) (idl []int, err error) {
 	if len(id) <= 0 {

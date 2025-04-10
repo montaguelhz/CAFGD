@@ -3,6 +3,7 @@ package simontype
 const (
 	SimonPluginName        = "Simon"
 	OpenGpuSharePluginName = "Open-Gpu-Share"
+	SimTimePluginName      = "Sim-Time"
 
 	RandomScorePluginName        = "RandomScore"
 	DotProductScorePluginName    = "DotProductScore"
@@ -10,6 +11,8 @@ const (
 	GpuPackingScorePluginName    = "GpuPackingScore"
 	BestFitScorePluginName       = "BestFitScore"
 	FGDScorePluginName           = "FGDScore"
+	FGDPPScorePluginName         = "FGDPPScore"
+	CAFGDScorePluginName         = "CAFGDScore"
 
 	NewNodeNamePrefix    = "simon"
 	DefaultSchedulerName = "simon-scheduler"

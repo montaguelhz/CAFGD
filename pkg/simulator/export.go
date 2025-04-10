@@ -217,7 +217,7 @@ func (sim *Simulator) ExportNodeSnapshotInCSV(filePath string) {
 	nodeResMap := utils.GetNodeResourceMap(nodeStatus)
 
 	header := []string{
-		"name", "ip", "model", "cpu", "gpu", "memory_mib", "gpu_mem_mib_each", "num_pod",
+		"name", "ip", "model", "cpu", "gpu", "memory_mib", "gpu_mem_mib_each", "num_pod", "num_share_pod",
 		"cpu_milli_left", "memory_mib_left",
 		"gpu_milli_left_0", "gpu_mem_mib_left_0",
 		"gpu_milli_left_1", "gpu_mem_mib_left_1",
@@ -273,6 +273,13 @@ func (sim *Simulator) ExportNodeSnapshotInCSV(filePath string) {
 		// num_pod
 		numPod := len(ns.Pods)
 		data = append(data, strconv.Itoa(numPod))
+		numSharePods := 0
+		for _, pod := range ns.Pods {
+			if gpushareutils.GetGpuCountFromPodAnnotation(pod) == 1 && gpushareutils.GetGpuMilliFromPodAnnotation(pod) < 1000 {
+				numSharePods++
+			}
+		}
+		data = append(data, strconv.Itoa(numSharePods))
 
 		// cpu_milli_left
 		data = append(data, strconv.FormatInt(nodeRes.MilliCpuLeft, 10))

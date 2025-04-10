@@ -9,8 +9,8 @@ from utils import parse_workload_name, POLICY_ABBR_DICT
 
 PAPER_PLOT=False # False: Plot with thinner lines for Presentation
 SAVEFIG=True     # False: plt.show()
-TUNE_RATIO = 1.3
-FIGNAME = "openb_multigpu_alloc_bar.pdf"
+TUNE_RATIO = 0
+FIGNAME = "static_multigpu_alloc_bar.png"
 
 # openb, multi-GPUs workloads
 workloads = ['openb_pod_list_multigpu20',
@@ -47,7 +47,8 @@ for type, file in FILEDICT.items():
     # display(dfn)
     # print("SC_POLICY_LIST=[%s]" % (",".join("'%s'" % x for x in list(dfn.sc_policy.unique()))))
 
-    dfn13 = dfn[dfn.tune == TUNE_RATIO].copy()
+    # dfn13 = dfn[dfn.tune == TUNE_RATIO].copy()
+    dfn13 = dfn.copy()
     cols = list(dfn13.columns)
     for col in ['workload','sc_policy','tune','seed','total_gpus']:
         if col in cols:
@@ -66,7 +67,7 @@ for type, file in FILEDICT.items():
     dfnp.sc_policy = dfnp.sc_policy.apply(lambda x: POLICY_ABBR_DICT.get(x, x))
     dfp_dict[type] = dfnp
 
-policy_keep = ['FGD', 'BestFit', 'Packing', 'Clustering', 'DotProd', 'Random']
+policy_keep = ['CAFGD-M', 'FGD']
 
 # ['alloc', 'frag_amount', 'frag_ratio']
 dfnp = dfp_dict['alloc']
@@ -82,8 +83,14 @@ dfnpp.workload = dfnpp.workload.apply(lambda x:
     "openb_pod_list_multigpu50": '50%',
 }.get(x, x))
 dfnpp = dfnpp[dfnpp.sc_policy.isin(policy_keep)]
-plt.figure(figsize=(10, 3), dpi=120)
-bars = sns.barplot(data=dfnpp, x='workload', y='alloc_rate_reverse', hue='sc_policy', errorbar='sd', hue_order=policy_keep, edgecolor="0")
+
+plt.figure(figsize=(8, 6), dpi=120)
+colors = sns.color_palette()
+colors.reverse()
+colors = colors[-2:]
+
+bars = sns.barplot(data=dfnpp, x='workload', y='alloc_rate_reverse', hue='sc_policy', errorbar='sd', hue_order=policy_keep, edgecolor="0",
+                   palette = colors)
 hatches = [ "/" , "\\" , "|" , "-" , "+" , "x", "o", "O", ".", "*" ]
 num_policy = len(policy_keep)
 num_groups = len(bars.patches) // num_policy
@@ -100,13 +107,13 @@ plt.xlabel('Percentage of GPUs occupied by multi-GPU workloads') # plt.xlabel('A
 plt.ylabel('Unallocated GPU (%)')
 
 plt.legend()
-plt.ylim(0, 21.7)
+plt.ylim(0, 15.5)
 # plt.title("%s" % (workload))
 
 plt.grid(linestyle='-.', alpha=0.8, axis='y')
 # plt.legend(ncol=3, loc='upper right', bbox_to_anchor=(0.665, 1.03))
-plt.legend(ncol=3, loc='upper left')
-plt.xlabel('Proportion of multi-GPU workloads in terms of GPU requests')
+plt.legend(ncol=1, loc='upper left')
+plt.xlabel('Proportion of multi-GPU workloads')
 
 SAVEFIG=True
 if SAVEFIG:

@@ -4,7 +4,7 @@ import (
 	"log"
 	"sync"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/hkust-adsl/kubernetes-scheduler-simulator/pkg/type/open-gpu-share/utils"
@@ -18,6 +18,8 @@ type DeviceInfo struct {
 }
 
 func (d *DeviceInfo) GetPods() []*v1.Pod {
+	d.rwmu.RLock()
+	defer d.rwmu.RUnlock()
 	pods := []*v1.Pod{}
 	for _, pod := range d.podMap {
 		pods = append(pods, pod)
@@ -81,6 +83,8 @@ type DeviceInfoBrief struct {
 }
 
 func (d *DeviceInfo) ExportDeviceInfoBrief() *DeviceInfoBrief {
+	d.rwmu.RLock()
+	defer d.rwmu.RUnlock()
 	var podList []string
 	for _, pod := range d.podMap {
 		podList = append(podList, utils.GeneratePodKey(pod))

@@ -80,7 +80,7 @@ for fdir in fileDirs:
         for tdir in tuneDirs:
             seedDirs = sorted([x for x in tdir.iterdir() if x.is_dir()])
             for sdir in seedDirs:
-                ifile = fdir / pdir / tdir / sdir / IN_FILE
+                ifile = fdir / pdir / tdir / IN_FILE
                 print(ifile)
                 if not ifile.is_file():
                     continue

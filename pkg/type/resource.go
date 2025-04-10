@@ -5,10 +5,21 @@ import (
 	"sort"
 	"strconv"
 
+	// "container/heap"
+
 	log "github.com/sirupsen/logrus"
+	"k8s.io/kubernetes/pkg/scheduler/framework"
 
 	gpushareutils "github.com/hkust-adsl/kubernetes-scheduler-simulator/pkg/type/open-gpu-share/utils"
 )
+
+type AllocateGpuIdArgs struct {
+	TargetPodList    *TargetPodList
+	NewTypicalPodMap *NewTypicalPodMap
+	PredictPod       *PredictPod
+	FakeTime         *FakeTime
+	Handle           framework.Handle
+}
 
 type TargetPod struct {
 	TargetPodResource PodResource
@@ -53,6 +64,13 @@ type PodResource struct { // typical pod, without name and namespace.
 	GpuNumber int
 	GpuType   string
 	//Memory	  int64
+}
+
+type PodResWithTime struct {
+	PodRes    PodResource
+	PlanTime  int
+	StartTime int
+	EndTime   int
 }
 
 // NodeResource is initialized by utils.GetNodeResourceViaPodList, utils.GetNodeResourceViaHandleAndName, utils.GetNodeResourceViaNodeInfo
@@ -361,6 +379,7 @@ func AllocateExclusiveGpuId(nodeRes NodeResource, podRes PodResource) (gpuId str
 		}
 	}
 	if podGpuReq > 0 {
+		log.Errorf("podGPUReq:%d, MilliGpuLeftList:%v, nodeName:%s", podGpuReq, nodeRes.MilliGpuLeftList, nodeRes.NodeName)
 		panic("there is no enough exclusive gpu to serve pod, should not happen")
 	}
 
@@ -466,7 +485,7 @@ func (tnr NodeResource) Add(tpr PodResource, idl []int) (NodeResource, error) {
 				return out, err
 			}
 			if out.MilliGpuLeftList[idl[i]]+tpr.MilliGpu > gpushareutils.MILLI {
-				err := fmt.Errorf("[ERROR] idl[%d]=%d of pod %s exceeds %d", i, idl[i], tpr.Repr(), gpushareutils.MILLI)
+				err := fmt.Errorf("[ERROR] idl[%d]=%d of pod %s exceeds %d, out.MilliGpuLeftList[idl[i]]:%d", i, idl[i], tpr.Repr(), gpushareutils.MILLI, out.MilliGpuLeftList[idl[i]])
 				log.Errorln(err.Error())
 				return out, err
 			}

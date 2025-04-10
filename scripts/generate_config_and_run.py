@@ -26,11 +26,15 @@ SCORE_POLICY_ABBR = {
     "GpuPackingScore":    "GpuPacking",
     "BestFitScore":       "BestFit",
     "FGDScore":           "FGD",
+    "FGDPPScore":         "FGDPP",
+    "CAFGDScore":         "CAFGD"
 }
 
 SCORE_PLUGINS_WITH_DIM_NORM_GPU_METHOD = [
     "DotProductScore", # dot product
     "FGDScore",        # FGD
+    "FGDPPScore",
+    "CAFGDScore"
 ]
 SCORE_PLUGINS_WITH_PRE_FILTER = [
 ]
@@ -135,6 +139,8 @@ def generate_cluster_config(args, outdir):
                 v["appList"][0]["name"] = applist_name
                 v["appList"][0]["path"] = args.applist_path
 
+            # v['cluster']["customConfig"] = args.custom_config+"/node"
+            # v['cluster']["podConfig"] = args.custom_config+"/pod"
             v['cluster']["customConfig"] = args.custom_config
             v['newNode'] = args.new_node
 
@@ -194,6 +200,11 @@ percentageOfNodesToScore: 100
 profiles:
   - schedulerName: simon-scheduler
     plugins:
+      preFilter:
+        disabled:
+          - name: Sim-Time
+        enabled:
+          - name: Sim-Time
       filter:
         enabled:
           - name: Open-Gpu-Share
@@ -209,6 +220,8 @@ profiles:
           - name: GpuPackingScore
           - name: BestFitScore
           - name: FGDScore
+          - name: FGDPPScore
+          - name: CAFGDScore
           # 
           - name: ImageLocality
           - name: NodeAffinity
@@ -220,8 +233,11 @@ profiles:
           - name: NodePreferAvoidPods
         enabled:
       reserve:
+        disabled:
+          - name: Sim-Time
         enabled:
           - name: Open-Gpu-Share
+          - name: Sim-Time
       bind:
         disabled:
           - name: DefaultBinder
@@ -352,8 +368,8 @@ def exp(args):
     custom_config_path = Path(args.custom_config)
     if not custom_config_path.exists() or not custom_config_path.is_dir():
         exit("[WARNING] --custom-config (-f) path not exist or not a dir: %s" % custom_config_path)
-    if len([x for x in custom_config_path.glob("*.yaml")]) == 0:
-        exit("[WARNING] --custom-config (-f) path has no yaml file: %s" % custom_config_path)
+    # if len([x for x in custom_config_path.glob("*.yaml")]) == 0:
+    #     exit("[WARNING] --custom-config (-f) path has no yaml file: %s" % custom_config_path)
 
     cluster_dir = expdir
     cluster_file = generate_cluster_config(args, cluster_dir)

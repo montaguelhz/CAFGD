@@ -210,6 +210,16 @@ func (n *GpuNodeInfo) getIdleGpus() (idleGpus map[int]int64) {
 	return idleGpus
 }
 
+func (n *GpuNodeInfo) GetIdleGpus() []int64 {
+	count := utils.GetGpuCountOfNode(n.node)
+	list := make([]int64, count)
+	gpus := n.getIdleGpus()
+	for i := 0; i < count; i++ {
+		list[i] = gpus[i]
+	}
+	return list
+}
+
 // device index -> used GPU milli
 func (n *GpuNodeInfo) getUsedGpus() (usedGpus map[int]int64) {
 	usedGpus = map[int]int64{}

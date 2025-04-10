@@ -26,19 +26,20 @@ import (
 // GpuSharePlugin is a plugin for scheduling framework
 type GpuSharePlugin struct {
 	sync.RWMutex
-	cache       *gpusharecache.SchedulerCache
-	cfg         *simontype.OpenGpuSharePluginCfg
-	handle      framework.Handle
-	typicalPods *simontype.TargetPodList
+	cache     *gpusharecache.SchedulerCache
+	cfg       *simontype.OpenGpuSharePluginCfg
+	handle    framework.Handle
+	args      simontype.AllocateGpuIdArgs
+	FilterPod string
 }
 
 // Just to check whether the implemented struct fits the interface
 var _ framework.FilterPlugin = &GpuSharePlugin{}
 var _ framework.ReservePlugin = &GpuSharePlugin{}
 
-var allocateGpuIdFunc = map[string]func(nodeRes simontype.NodeResource, podRes simontype.PodResource, cfg simontype.GpuPluginCfg, typicalPods *simontype.TargetPodList) (gpuId string){}
+var allocateGpuIdFunc = map[string]func(nodeRes simontype.NodeResource, podRes simontype.PodResWithTime, cfg simontype.GpuPluginCfg, args simontype.AllocateGpuIdArgs) (gpuId string){}
 
-func NewGpuSharePlugin(configuration runtime.Object, handle framework.Handle, typicalPods *simontype.TargetPodList) (framework.Plugin, error) {
+func NewGpuSharePlugin(configuration runtime.Object, handle framework.Handle, args simontype.AllocateGpuIdArgs) (framework.Plugin, error) {
 	var cfg *simontype.OpenGpuSharePluginCfg
 	if err := frameworkruntime.DecodeInto(configuration, &cfg); err != nil {
 		return nil, err
@@ -50,9 +51,10 @@ func NewGpuSharePlugin(configuration runtime.Object, handle framework.Handle, ty
 	allocateGpuIdFunc[string(simontype.SelRandomGpu)] = allocateGpuIdBasedOnRandomFit
 
 	gpuSharePlugin := &GpuSharePlugin{
-		cfg:         cfg,
-		handle:      handle,
-		typicalPods: typicalPods,
+		cfg:       cfg,
+		handle:    handle,
+		args:      args,
+		FilterPod: "",
 	}
 	gpuSharePlugin.initSchedulerCache()
 	handle.SharedInformerFactory().Core().V1().Pods().Informer().AddEventHandler(
@@ -81,12 +83,22 @@ func (plugin *GpuSharePlugin) Name() string {
 func (plugin *GpuSharePlugin) Filter(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeInfo *framework.NodeInfo) *framework.Status {
 	//fmt.Printf("filter_gpu: pod %s/%s, nodeName %s\n", pod.Namespace, pod.Name, nodeInfo.Node().Name)
 	// Pass if the pod does not require GPU resources
+	plugin.Lock()
+	plugin.FilterPod = pod.Name
+	plugin.Unlock()
+	nodeResPtr := utils.GetNodeResourceViaHandleAndName(plugin.handle, nodeInfo.Node().Name)
+	nodeRes := *nodeResPtr
+
 	if podGpuMilli := gpushareutils.GetGpuMilliFromPodAnnotation(pod); podGpuMilli <= 0 {
+		if pod.Spec.Containers[0].Resources.Requests.Cpu().MilliValue() > nodeRes.MilliCpuLeft {
+			plugin.args.FakeTime.CpuLacked = true
+		}
 		return framework.NewStatus(framework.Success)
 	}
 	node := nodeInfo.Node()
 	// Reject if the node has no GPU resource
 	if nodeGpuCount := gpushareutils.GetGpuCountOfNode(node); nodeGpuCount == 0 {
+		plugin.args.FakeTime.GpuLacked = true
 		return framework.NewStatus(framework.Unschedulable, "Node:"+nodeInfo.Node().Name)
 	}
 
@@ -94,18 +106,23 @@ func (plugin *GpuSharePlugin) Filter(ctx context.Context, state *framework.Cycle
 	nodeGpuType := gpushareutils.GetGpuModelOfNode(node)
 	podGpuType := gpushareutils.GetGpuModelFromPodAnnotation(pod)
 	if utils.IsNodeAccessibleToPodByType(nodeGpuType, podGpuType) == false {
+		plugin.args.FakeTime.GpuLacked = true
 		return framework.NewStatus(framework.Unschedulable, "Node:"+nodeInfo.Node().Name)
 	}
 
 	gpuNodeInfo, err := plugin.cache.GetGpuNodeInfo(node.Name)
 	if err != nil {
+		plugin.args.FakeTime.GpuLacked = true
 		return framework.NewStatus(framework.Unschedulable, "Node:"+nodeInfo.Node().Name)
 	}
 	_, found := gpuNodeInfo.AllocateGpuId(pod)
 	if !found {
+		plugin.args.FakeTime.GpuLacked = true
 		return framework.NewStatus(framework.Unschedulable, "Node:"+nodeInfo.Node().Name)
 	}
-
+	if pod.Spec.Containers[0].Resources.Requests.Cpu().MilliValue() > nodeRes.MilliCpuLeft {
+		plugin.args.FakeTime.CpuLacked = true
+	}
 	return framework.NewStatus(framework.Success)
 }
 
@@ -153,10 +170,15 @@ func (plugin *GpuSharePlugin) removePod(pod *v1.Pod, nodeName string) error {
 	if err != nil {
 		return err
 	}
+	// noderes := utils.GetNodeResourceViaHandleAndName(plugin.handle, nodeName)
+	// log.Infof("[BeforeRemove] MilliGpuLeftList:%v, podRes:%v", noderes.MilliCpuCapacity, utils.GetPodResource(pod))
 	plugin.cache.RemovePod(pod, nodeName)
 	if err = plugin.updateNode(node); err != nil {
 		return err
 	}
+	log.Infof("[removePod] pod:%s, node:%s", pod.Name, nodeName)
+	// noderes = utils.GetNodeResourceViaHandleAndName(plugin.handle, nodeName)
+	// log.Infof("[AfterRemove] MilliGpuLeftList:%v", noderes.MilliGpuLeftList)
 	return nil
 }
 
@@ -166,7 +188,7 @@ func (plugin *GpuSharePlugin) Reserve(ctx context.Context, state *framework.Cycl
 	plugin.Lock()
 	defer plugin.Unlock()
 
-	log.Debugf("reserve pod(%s) on node(%s)\n", utils.GeneratePodKey(pod), nodeName)
+	log.Infof("reserve pod(%s) on node(%s)\n", utils.GeneratePodKey(pod), nodeName)
 	if gpushareutils.GetGpuMilliFromPodAnnotation(pod) <= 0 {
 		return framework.NewStatus(framework.Success) // non-GPU pods are skipped
 	}
@@ -185,7 +207,8 @@ func (plugin *GpuSharePlugin) Reserve(ctx context.Context, state *framework.Cycl
 	if err = schedulerutil.PatchPod(plugin.handle.ClientSet(), pod, podCopy); err != nil {
 		return framework.NewStatus(framework.Error, err.Error())
 	}
-
+	idl, _ := gpushareutils.GetGpuIdListFromAnnotation(pod)
+	plugin.args.PredictPod.AddGpuIds(pod.Name, pod.Namespace, idl)
 	return framework.NewStatus(framework.Success)
 }
 
@@ -194,6 +217,7 @@ func (plugin *GpuSharePlugin) Unreserve(ctx context.Context, state *framework.Cy
 	plugin.Lock()
 	defer plugin.Unlock()
 
+	log.Infof("Unreserve pod(%s)", pod.Name)
 	if err := plugin.removePod(pod, nodeName); err != nil {
 		log.Errorln(err.Error())
 	}
@@ -238,13 +262,13 @@ func (plugin *GpuSharePlugin) allocateGpuId(pod *v1.Pod, nodeName string) string
 		return ""
 	}
 	nodeRes := *nodeResPtr
-	podRes := utils.GetPodResource(pod)
+	podRes := utils.GetPodResourceWithTime(pod)
 
 	if id := gpushareutils.GetGpuIdFromAnnotation(pod); len(id) > 0 {
 		if idl, err := gpushareutils.GpuIdStrToIntList(id); err == nil && len(idl) > 0 { // just to validate id; not return idl.
 			for _, devId := range idl {
 				idleGpuMilli := nodeRes.MilliGpuLeftList[devId]
-				if idleGpuMilli < podRes.MilliGpu {
+				if idleGpuMilli < podRes.PodRes.MilliGpu {
 					panic("idleGpuMilli >= podRes.MilliGpu")
 				}
 			}
@@ -255,17 +279,19 @@ func (plugin *GpuSharePlugin) allocateGpuId(pod *v1.Pod, nodeName string) string
 	}
 
 	if f, ok := allocateGpuIdFunc[string(plugin.cfg.GpuSelMethod)]; ok {
-		if podRes.MilliGpu < gpushareutils.MILLI && podRes.GpuNumber > 1 {
+		if podRes.PodRes.MilliGpu < gpushareutils.MILLI && podRes.PodRes.GpuNumber > 1 {
 			panic("the pod requests more than one share gpu, should not happen")
 		}
-		gpuId := f(nodeRes, podRes, plugin.cfg.GpuPluginCfg, plugin.typicalPods)
+		plugin.args.Handle = plugin.handle
+		gpuId := f(nodeRes, podRes, plugin.cfg.GpuPluginCfg, plugin.args)
 		return gpuId
 	} else {
 		panic("undefined allocate gpu id function")
 	}
 }
 
-func allocateGpuIdBasedOnBestFit(nodeRes simontype.NodeResource, podRes simontype.PodResource, _ simontype.GpuPluginCfg, _ *simontype.TargetPodList) (gpuId string) {
+func allocateGpuIdBasedOnBestFit(nodeRes simontype.NodeResource, p simontype.PodResWithTime, _ simontype.GpuPluginCfg, _ simontype.AllocateGpuIdArgs) (gpuId string) {
+	podRes := p.PodRes
 	gpuId = ""
 
 	if podRes.MilliGpu < gpushareutils.MILLI { // share-gpu pod
@@ -285,7 +311,8 @@ func allocateGpuIdBasedOnBestFit(nodeRes simontype.NodeResource, podRes simontyp
 	return gpuId
 }
 
-func allocateGpuIdBasedOnWorstFit(nodeRes simontype.NodeResource, podRes simontype.PodResource, _ simontype.GpuPluginCfg, _ *simontype.TargetPodList) (gpuId string) {
+func allocateGpuIdBasedOnWorstFit(nodeRes simontype.NodeResource, p simontype.PodResWithTime, _ simontype.GpuPluginCfg, _ simontype.AllocateGpuIdArgs) (gpuId string) {
+	podRes := p.PodRes
 	gpuId = ""
 
 	if podRes.MilliGpu < gpushareutils.MILLI { // share-gpu pod
@@ -305,9 +332,9 @@ func allocateGpuIdBasedOnWorstFit(nodeRes simontype.NodeResource, podRes simonty
 	return gpuId
 }
 
-func allocateGpuIdBasedOnRandomFit(nodeRes simontype.NodeResource, podRes simontype.PodResource, _ simontype.GpuPluginCfg, _ *simontype.TargetPodList) (gpuId string) {
+func allocateGpuIdBasedOnRandomFit(nodeRes simontype.NodeResource, p simontype.PodResWithTime, _ simontype.GpuPluginCfg, _ simontype.AllocateGpuIdArgs) (gpuId string) {
 	gpuId = ""
-
+	podRes := p.PodRes
 	if podRes.MilliGpu < gpushareutils.MILLI { // share-gpu pod
 		var cntOfAvailableGpu = 0
 		for id, milliGpuLeft := range nodeRes.MilliGpuLeftList {

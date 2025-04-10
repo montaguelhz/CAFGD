@@ -4,13 +4,22 @@ metadata:
   name: simon-paib-config
 spec:
   cluster:
-    customConfig: example/test-cluster
+    customConfig: C:\lab\k8s\kubernetes-scheduler-simulator\example\test-cluster
+    # customConfig: /mnt/c/lab/k8s/kubernetes-scheduler-simulator/data/openb_pod_list_gpuspec05
   customConfig:
     shufflePod: false
-    workloadTuningConfig:
-      ratio: 0.9
-      seed: 233
+    descheduleConfig:
+      ratio: 0.0
+    newWorkloadConfig: null
     typicalPodsConfig:
+      gpuResWeight: 0
       isInvolvedCpuPods: true
+      podIncreaseStep: 1
       podPopularityThreshold: 95
-      isConsideredGpuResWeight: false
+    workloadInflationConfig:
+      ratio: 1
+      seed: 233
+    workloadTuningConfig:
+      ratio: 0
+      seed: 42
+  newNode: example/newnode/gpushare

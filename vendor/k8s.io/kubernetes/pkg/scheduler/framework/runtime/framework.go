@@ -541,10 +541,10 @@ func (f *frameworkImpl) RunFilterPlugins(
 				return map[string]*framework.Status{pl.Name(): errStatus}
 			}
 			statuses[pl.Name()] = pluginStatus
-			if !f.runAllFilters {
-				// Exit early if we don't need to run all filters.
-				return statuses
-			}
+			// if !f.runAllFilters {
+			// 	// Exit early if we don't need to run all filters.
+			// 	return statuses
+			// }
 		}
 	}
 

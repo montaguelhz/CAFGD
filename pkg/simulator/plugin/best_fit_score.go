@@ -57,11 +57,13 @@ func (plugin *BestFitScorePlugin) ScoreExtensions() framework.ScoreExtensions {
 }
 
 func (plugin *BestFitScorePlugin) NormalizeScore(ctx context.Context, state *framework.CycleState, p *corev1.Pod, scores framework.NodeScoreList) *framework.Status {
-	return NormalizeScore(scores)
+	return NormalizeScore(scores, p)
 }
 
 // BestFit originally assigns a score Σ_{i} weights_{i} (free_{i} - request_{i}) / maxSpec_{i},
-//   where i corresponds to one kind of resource, lower is better
+//
+//	where i corresponds to one kind of resource, lower is better
+//
 // After revision, it scales to [MinNodeScore(0), MaxNodeScore(100)], higher is better
 func getBestFitScore(nodeRes simontype.NodeResource, podRes simontype.PodResource) int64 {
 	freeVec := nodeRes.ToResourceVec()

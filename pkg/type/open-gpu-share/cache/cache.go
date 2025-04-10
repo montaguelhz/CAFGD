@@ -4,7 +4,7 @@ import (
 	"sync"
 
 	log "github.com/sirupsen/logrus"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/hkust-adsl/kubernetes-scheduler-simulator/pkg/type/open-gpu-share/utils"
@@ -70,6 +70,12 @@ func (cache *SchedulerCache) GetPod(name, namespace string) (*v1.Pod, error) {
 	return cache.getter.PodGet(name, namespace)
 }
 
+func (cache *SchedulerCache) GetPodByUID(podUID types.UID) *v1.Pod {
+	cache.nLock.RLock()
+	defer cache.nLock.RUnlock()
+	return cache.knownPods[podUID]
+}
+
 // KnownPod Get known pod from the pod UID
 func (cache *SchedulerCache) KnownPod(podUID types.UID) bool {
 	cache.nLock.RLock()
@@ -96,6 +102,7 @@ func (cache *SchedulerCache) AddOrUpdatePod(pod *v1.Pod, nodeName string) error 
 	return nil
 }
 
+// 幂等
 // The lock is in cacheNode
 func (cache *SchedulerCache) RemovePod(pod *v1.Pod, nodeName string) {
 	n, err := cache.GetGpuNodeInfo(nodeName)

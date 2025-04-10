@@ -36,7 +36,7 @@ import (
 )
 
 // GenerateValidPodsFromAppResources generate valid pods from resources
-func GenerateValidPodsFromAppResources(client externalclientset.Interface, appname string, resources ResourceTypes) ([]*corev1.Pod, error) {
+func GenerateValidPodsFromAppResources(client externalclientset.Interface, appname string, resources *ResourceTypes) ([]*corev1.Pod, error) {
 	pods := make([]*corev1.Pod, 0)
 	validPods, err := GetValidPodExcludeDaemonSet(resources)
 	if err != nil {
@@ -76,7 +76,7 @@ func GenerateValidPodsFromAppResources(client externalclientset.Interface, appna
 }
 
 // GetValidPodExcludeDaemonSet gets valid pod by resources exclude DaemonSet that needs to be handled specially
-func GetValidPodExcludeDaemonSet(resources ResourceTypes) ([]*corev1.Pod, error) {
+func GetValidPodExcludeDaemonSet(resources *ResourceTypes) ([]*corev1.Pod, error) {
 	pods := make([]*corev1.Pod, 0)
 	//get valid pods by pods
 	for _, item := range resources.Pods {

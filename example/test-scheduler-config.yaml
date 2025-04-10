@@ -2,45 +2,57 @@ apiVersion: kubescheduler.config.k8s.io/v1beta1
 kind: KubeSchedulerConfiguration
 percentageOfNodesToScore: 100
 profiles:
-  - schedulerName: simon-scheduler
-    plugins:
-      filter:
-        enabled:
-          - name: Open-Gpu-Share
-      score:
-        disabled:
-          - name: RandomScore
-          - name: DotProductScore
-          - name: GpuClusteringScore
-          - name: GpuPackingScore
-          - name: BestFitScore
-          - name: FGDScore
-          - name: ImageLocality
-          - name: NodeAffinity
-          - name: PodTopologySpread
-          - name: TaintToleration
-          - name: NodeResourcesBalancedAllocation
-          - name: InterPodAffinity
-          - name: NodeResourcesLeastAllocated
-          - name: NodePreferAvoidPods
-        enabled:
-          - name: FGDScore
-            weight: 1000
-      reserve:
-        enabled:
-          - name: Open-Gpu-Share
-      bind:
-        disabled:
-          - name: DefaultBinder
-        enabled:
-          - name: Simon
-    pluginConfig:
-      - name: FGDScore
-        args:
-          dimExtMethod: share
-          normMethod: max
+- pluginConfig:
+  - args:
+      dimExtMethod: share
+      normMethod: max
+    name: FFBPScore
+  - args:
+      dimExtMethod: share
+      gpuSelMethod: FFBPScore
+      normMethod: max
+    name: Open-Gpu-Share
+  plugins:
+    bind:
+      disabled:
+      - name: DefaultBinder
+      enabled:
+      - name: Simon
+    filter:
+      enabled:
       - name: Open-Gpu-Share
-        args:
-          dimExtMethod: share
-          normMethod: max
-          gpuSelMethod: FGDScore
+    postFilter:
+      disabled:
+      - name: Scale-Pod
+    preScore:
+      disabled:
+      - name: RandomScore
+      enabled: null
+    reserve:
+      disabled:
+      - name: Scale-Pod
+      enabled:
+      - name: Open-Gpu-Share
+      - name: Sim-Time
+    score:
+      disabled:
+      - name: RandomScore
+      - name: DotProductScore
+      - name: GpuClusteringScore
+      - name: GpuPackingScore
+      - name: BestFitScore
+      - name: FGDScore
+      - name: FGDPPScore
+      - name: FFBPScore
+      - name: ImageLocality
+      - name: NodeAffinity
+      - name: PodTopologySpread
+      - name: TaintToleration
+      - name: NodeResourcesBalancedAllocation
+      - name: InterPodAffinity
+      - name: NodeResourcesLeastAllocated
+      - name: NodePreferAvoidPods
+      enabled:
+      - name: FFBPScore
+        weight: 1000
+  schedulerName: simon-scheduler

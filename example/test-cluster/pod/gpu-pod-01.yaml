@@ -3,6 +3,9 @@ kind: Pod
 metadata:
   name: gpu-pod-01
   namespace: pai-gpu
+  annotations:
+    start-time: '110.000'
+    end-time: '900.000'
 spec:
     containers:
     - image: tensorflow:latest

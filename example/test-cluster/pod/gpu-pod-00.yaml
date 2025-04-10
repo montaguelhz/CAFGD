@@ -4,8 +4,11 @@ metadata:
   name: gpu-pod-00
   namespace: pai-gpu
   annotations:
-    alibabacloud.com/gpu-milli: "500"
+    alibabacloud.com/gpu-milli: "1000"
     alibabacloud.com/gpu-count: "1"
+    plan_time: '100.00000'
+    start-time: '100.000'
+    end-time: '1000.000'
 spec:
     containers:
     - image: tensorflow:latest

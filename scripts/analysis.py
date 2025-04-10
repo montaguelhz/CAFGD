@@ -394,7 +394,7 @@ def grep_log_cluster_analysis(log_path, outfile=None):
             out.write(("\n===\n# %s:\n" % file.name).encode())
         
         with open(outfile, 'ab') as out:
-            command_list = ["grep", "-e", "Cluster Analysis", "-A", "16", file]
+            command_list = ["grep", "-e", "Cluster Analysis", "-A", "22", file]
             subprocess.call(command_list,stdout=out)  # it blocks. the python will exit but the process remains.
         
         # print("Done")

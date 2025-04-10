@@ -5,6 +5,7 @@ import (
 	"math"
 
 	log "github.com/sirupsen/logrus"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 
 	simontype "github.com/hkust-adsl/kubernetes-scheduler-simulator/pkg/type"
@@ -12,9 +13,10 @@ import (
 )
 
 // PreFilterFragGpuRatio return the fragGpuRatio (0.0-1.0) of the current cluster,
-//	 i.e., how many of the idle GPUs are fragment.
-//   Its output should be cached to plugin.fragGpuRatio to avoid re-computation.
-//   It should be called before filter to avoid the change of visible nodes.
+//
+//		 i.e., how many of the idle GPUs are fragment.
+//	  Its output should be cached to plugin.fragGpuRatio to avoid re-computation.
+//	  It should be called before filter to avoid the change of visible nodes.
 func PreFilterFragGpuRatio(nodeInfoList []*framework.NodeInfo, typicalPods simontype.TargetPodList) (float64, *framework.Status) {
 	data := make([]float64, len(utils.FragRatioDataMap))
 	clusterFragAmount := utils.NewFragAmount("cluster", data)
@@ -43,14 +45,17 @@ func PreFilterFragGpuRatio(nodeInfoList []*framework.NodeInfo, typicalPods simon
 }
 
 // NormalizeScore in Score Extension.
-//   Reused by all plugins whose scores might go beyond 0(framework.MinNodeScore)--100(framework.MaxNodeScore)
-func NormalizeScore(scores framework.NodeScoreList) *framework.Status {
+//
+//	Reused by all plugins whose scores might go beyond 0(framework.MinNodeScore)--100(framework.MaxNodeScore)
+func NormalizeScore(scores framework.NodeScoreList, p *corev1.Pod) *framework.Status {
 	// Find highest and lowest scores.
 	var highest int64 = -math.MaxInt64
 	var lowest int64 = math.MaxInt64
+	// name := ""
 	for _, nodeScore := range scores {
 		if nodeScore.Score > highest {
 			highest = nodeScore.Score
+			// name = nodeScore.Name
 		}
 		if nodeScore.Score < lowest {
 			lowest = nodeScore.Score
@@ -69,6 +74,7 @@ func NormalizeScore(scores framework.NodeScoreList) *framework.Status {
 		}
 		log.Tracef("[Normalized] Node %s, Score: %d\n", scores[i].Name, scores[i].Score)
 	}
+	// log.Infof("[Score] podName:%s,score:%d,NodeName:%s", p.Name, highest, name)
 	return framework.NewStatus(framework.Success)
 }
 

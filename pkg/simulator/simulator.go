@@ -50,18 +50,25 @@ type Simulator struct {
 	status status
 
 	//
-	workloadPods    []*corev1.Pod
-	typicalPods     simontype.TargetPodList
-	skylinePods     simontype.SkylinePodList
-	nodeResourceMap map[string]simontype.NodeResource
-	customConfig    v1alpha1.CustomConfig
-	fragMemo        sync.Map
-	arrPodGpuMilli  int64
+	workloadPods      []*corev1.Pod
+	typicalPods       simontype.TargetPodList
+	typicalPodsByTime simontype.TargetPodList
+	newTypicalPods    simontype.NewTypicalPodMap
+	fakeTime          *simontype.FakeTime
+	predictPod        *simontype.PredictPod
+	skylinePods       simontype.SkylinePodList
+	nodeResourceMap   map[string]simontype.NodeResource
+	customConfig      v1alpha1.CustomConfig
+	fragMemo          sync.Map
+	arrPodGpuMilli    int64
 
 	podTotalMilliCpuReq int64
 	podTotalMilliGpuReq int64
 	nodeTotalMilliCpu   int64
 	nodeTotalMilliGpu   int64
+
+	gpuSharePlugin *simonplugin.GpuSharePlugin
+	SimTimePlugin  *simonplugin.SimTimePlugin
 }
 
 // status captures reason why one pod fails to be scheduled
@@ -129,13 +136,29 @@ func New(opts ...Option) (Interface, error) {
 		customConfig:    options.customConfig,
 	}
 
+	sim.newTypicalPods.WinSize = 400
+	sim.newTypicalPods.PodMap = make(map[simontype.PodResource]int)
+	sim.newTypicalPods.PodList = make([]simontype.PodResource, 0)
+	sim.fakeTime = simontype.NewFakeTime()
+
+	sim.predictPod = simontype.NewPredictPod(400, 10000, 0.95)
+	sim.predictPod.TargetPods = &sim.typicalPodsByTime
+
+	args := simontype.AllocateGpuIdArgs{}
+	args.PredictPod = sim.predictPod
+	args.FakeTime = sim.fakeTime
+	args.NewTypicalPodMap = &sim.newTypicalPods
+	args.TargetPodList = &sim.typicalPods
+
 	// create a scheduler
 	bindRegistry := frameworkruntime.Registry{
 		simontype.SimonPluginName: func(configuration runtime.Object, handle framework.Handle) (framework.Plugin, error) {
 			return simonplugin.NewSimonPlugin(configuration, handle)
 		},
 		simontype.OpenGpuSharePluginName: func(configuration runtime.Object, handle framework.Handle) (framework.Plugin, error) {
-			return simonplugin.NewGpuSharePlugin(configuration, handle, &sim.typicalPods)
+			p, err := simonplugin.NewGpuSharePlugin(configuration, handle, args)
+			sim.gpuSharePlugin = p.(*simonplugin.GpuSharePlugin)
+			return p, err
 		},
 		simontype.RandomScorePluginName: func(configuration runtime.Object, handle framework.Handle) (framework.Plugin, error) {
 			return simonplugin.NewRandomScorePlugin(configuration, handle)
@@ -154,6 +177,17 @@ func New(opts ...Option) (Interface, error) {
 		},
 		simontype.FGDScorePluginName: func(configuration runtime.Object, handle framework.Handle) (framework.Plugin, error) {
 			return simonplugin.NewFGDScorePlugin(configuration, handle, &sim.typicalPods)
+		},
+		simontype.FGDPPScorePluginName: func(configuration runtime.Object, handle framework.Handle) (framework.Plugin, error) {
+			return simonplugin.NewFGDPPScorePlugin(configuration, handle, &sim.newTypicalPods)
+		},
+		simontype.CAFGDScorePluginName: func(configuration runtime.Object, handle framework.Handle) (framework.Plugin, error) {
+			return simonplugin.NewCAFGDScorePlugin(configuration, handle, sim.fakeTime, sim.predictPod)
+		},
+		simontype.SimTimePluginName: func(configuration runtime.Object, handle framework.Handle) (framework.Plugin, error) {
+			p, err := simonplugin.NewSimTimePlugin(configuration, handle, sim.fakeTime)
+			sim.SimTimePlugin = p.(*simonplugin.SimTimePlugin)
+			return p, err
 		},
 	}
 	sim.scheduler, err = scheduler.New(
@@ -176,24 +210,26 @@ func New(opts ...Option) (Interface, error) {
 	return sim, nil
 }
 
-// RunCluster with real client in a production cluster or fake client in a simulated cluster.
-func (sim *Simulator) RunCluster(cluster ResourceTypes) ([]simontype.UnscheduledPod, error) {
+func (sim *Simulator) Start() {
 	// start scheduler
 	sim.runScheduler()
 
+}
+
+// RunCluster with real client in a production cluster or fake client in a simulated cluster.
+func (sim *Simulator) RunCluster(cluster *ResourceTypes, podPath string) ([]simontype.UnscheduledPod, error) {
 	switch t := sim.client.(type) {
 	case *externalclientset.Clientset:
 		return nil, nil
 	case *fakeclientset.Clientset:
-		return sim.syncClusterResourceList(cluster)
+		return sim.syncClusterResourceList(cluster, podPath)
 	default:
 		return nil, fmt.Errorf("unknown client type: %T", t)
 	}
 }
 
 func (sim *Simulator) ScheduleApp(apps AppResource) ([]simontype.UnscheduledPod, error) {
-	// 由 AppResource 生成 Pods
-	appPods, err := GenerateValidPodsFromAppResources(sim.client, apps.Name, apps.Resource)
+	appPods, err := GenerateValidPodsFromAppResources(sim.client, apps.Name, &apps.Resource)
 	if err != nil {
 		return nil, err
 	}
@@ -289,7 +325,7 @@ func (sim *Simulator) deletePod(p *corev1.Pod) error {
 	}
 
 	// synchronization
-	sim.syncPodDelete(p.Namespace, p.Name, 500*time.Microsecond)
+	sim.syncPodDelete(p.Namespace, p.Name, 100*time.Microsecond)
 	if nodeName != "" {
 		sim.syncNodeUpdateOnPodDelete(nodeName, pod, 2*time.Millisecond)
 	} else {
@@ -298,15 +334,51 @@ func (sim *Simulator) deletePod(p *corev1.Pod) error {
 	return nil
 }
 
-func (sim *Simulator) assumePod(pod *corev1.Pod) *simontype.UnscheduledPod {
-	err := sim.createPod(pod)
-	if err != nil || sim.isPodUnscheduled(pod.Namespace, pod.Name) {
-		if err = sim.deletePod(pod); err != nil {
-			log.Errorf("[assumePod] failed to delete pod(%s)\n", utils.GeneratePodKey(pod))
-		}
-		return &simontype.UnscheduledPod{Pod: pod}
+func (sim *Simulator) deletePodByName(namespace, name string) error {
+	pod, _ := sim.client.CoreV1().Pods(namespace).Get(sim.ctx, name, metav1.GetOptions{})
+	nodeName := ""
+	if pod != nil {
+		nodeName = pod.Spec.NodeName
+	} else {
+		log.Debugf("[deletePod] attempt to delete a non-existed pod(%s)\n", utils.GeneratePodKeyByName(namespace, name))
+		return nil
+	}
+
+	// delete the pod
+	if err := sim.client.CoreV1().Pods(namespace).Delete(sim.ctx, name, metav1.DeleteOptions{}); err != nil {
+		return fmt.Errorf("%s(%s): %s", simontype.DeletePodError, utils.GeneratePodKeyByName(namespace, name), err.Error())
+	}
+
+	// synchronization
+	sim.syncPodDelete(namespace, name, 100*time.Microsecond)
+	if nodeName != "" {
+		sim.syncNodeUpdateOnPodDelete(nodeName, pod, 2*time.Millisecond)
+	} else {
+		log.Infof("[deletePod] attempt to delete a non-scheduled pod(%s)\n", utils.GeneratePodKeyByName(namespace, name))
 	}
 	return nil
+}
+
+func (sim *Simulator) assumePod(pod *corev1.Pod) *simontype.UnscheduledPod {
+	retryTimes := 0
+	// if sim.plugin != nil {
+	// 	retryTimes = 1
+	// }
+	i := 0
+	for i <= retryTimes {
+		i++
+		p := pod.DeepCopy()
+		err := sim.createPod(p)
+		if err != nil || sim.isPodUnscheduled(p.Namespace, p.Name) {
+			if err = sim.deletePod(p); err != nil {
+				log.Errorf("[assumePod] failed to delete pod(%s)\n", utils.GeneratePodKey(p))
+			}
+			continue
+		}
+		// log.Info("end sched")
+		return nil
+	}
+	return &simontype.UnscheduledPod{Pod: pod}
 }
 
 func (sim *Simulator) SchedulePods(pods []*corev1.Pod) []simontype.UnscheduledPod {
@@ -324,13 +396,61 @@ func (sim *Simulator) SchedulePods(pods []*corev1.Pod) []simontype.UnscheduledPo
 
 		deletionTime := gpushareutils.GetDeletionTimeFromPodAnnotation(pod)
 		if deletionTime == nil {
-			podRes := utils.GetPodResource(pod)
-			sim.arrPodGpuMilli += podRes.TotalMilliGpu()
+			podRes := utils.GetPodResourceWithTime(pod)
+
+			end := podRes.EndTime
+			start := podRes.StartTime
+			j := i + 2
+			sim.predictPod.RealPodList = make([]simontype.PodResWithTime, 0)
+			for j < len(pods) && start < end {
+				next := pods[j]
+				nextRes := utils.GetPodResourceWithTime(next)
+				start = nextRes.StartTime
+				if start >= end {
+					break
+				}
+				sim.predictPod.RealPodList = append(sim.predictPod.RealPodList, nextRes)
+
+				j += 2
+			}
+			sim.arrPodGpuMilli += podRes.PodRes.TotalMilliGpu()
+
+			// NOTE(lhz): Remove expired Pods before scheduling
+			if sim.SimTimePlugin != nil {
+				sim.predictPod.Add(podRes)
+				sim.fakeTime.FakeCurrentTime = podRes.StartTime
+				traces := sim.fakeTime.ReleasePodBeforeTime(podRes.StartTime)
+				for _, trace := range traces {
+					if err := sim.deletePodByName(trace.PodNameSpace, trace.PodName); err != nil {
+						log.Errorf("failed to delete pod(%s)\n", utils.GeneratePodKeyByName(trace.PodNameSpace, trace.PodName))
+					}
+				}
+			}
+
 			log.Infof("[%d] attempt to create pod(%s)\n", i, utils.GeneratePodKey(pod))
 			if unscheduledPod := sim.assumePod(pod); unscheduledPod != nil {
-				log.Infof("[%d] failed to schedule pod(%s): %s\n", i, utils.GeneratePodKey(pod), utils.GetPodResource(pod).Repr())
+
 				failedPods = append(failedPods, *unscheduledPod)
+				sim.fakeTime.FailedPodNum++
+				if sim.fakeTime.CpuLacked {
+					sim.fakeTime.FailedPodNumByCpuLack++
+					log.Infof("[%d] failed to schedule pod(%s): %s by cpu lack\n", i, utils.GeneratePodKey(pod), utils.GetPodResource(pod).Repr())
+				} else if sim.fakeTime.GpuLacked {
+					sim.fakeTime.FailedPodNumByGpuLack++
+					log.Infof("[%d] failed to schedule pod(%s): %s by gpu lack\n", i, utils.GeneratePodKey(pod), utils.GetPodResource(pod).Repr())
+				} else {
+					log.Infof("[%d] failed to schedule pod(%s): %s by unkonwn lack\n", i, utils.GeneratePodKey(pod), utils.GetPodResource(pod).Repr())
+				}
+				sim.fakeTime.CpuLacked = false
+				sim.fakeTime.GpuLacked = false
+
 			}
+			// pod, _ = sim.client.CoreV1().Pods(pod.Namespace).Get(context.TODO(), pod.Name, metav1.GetOptions{})
+			// node, _ := sim.client.CoreV1().Nodes().Get(context.TODO(), pod.Spec.NodeName, metav1.GetOptions{})
+			// log.Infof("%v", node.GetAnnotations())
+			// sim.client.CoreV1().Pods(pod.Namespace).Delete(context.TODO(), pod.Name, metav1.DeleteOptions{})
+			// node, _ = sim.client.CoreV1().Nodes().Get(context.TODO(), pod.Spec.NodeName, metav1.GetOptions{})
+			// log.Infof("%v", node.GetAnnotations())
 		} else {
 			log.Infof("[%d] attempt to delete pod(%s)\n", i, utils.GeneratePodKey(pod))
 			if err := sim.deletePod(pod); err != nil {
@@ -340,6 +460,7 @@ func (sim *Simulator) SchedulePods(pods []*corev1.Pod) []simontype.UnscheduledPo
 		sim.ClusterGpuFragReport()
 		// sim.ReportFragBasedOnSkyline()
 	}
+
 	return failedPods
 }
 
@@ -356,8 +477,7 @@ func (sim *Simulator) isPodUnscheduled(ns, name string) bool {
 	pod, _ := sim.client.CoreV1().Pods(ns).Get(sim.ctx, name, metav1.GetOptions{})
 	if pod != nil && pod.Spec.NodeName == "" {
 		for _, condition := range pod.Status.Conditions {
-			if condition.Type == corev1.PodScheduled && condition.Status == corev1.ConditionFalse &&
-				condition.Reason == corev1.PodReasonUnschedulable {
+			if condition.Type == corev1.PodScheduled && condition.Status == corev1.ConditionFalse {
 				return true
 			}
 		}
@@ -473,16 +593,16 @@ func (sim *Simulator) syncNodeCreate(name string, d time.Duration) {
 }
 
 // syncClusterResourceList: 1) load Pods into creation and deletion events. 2) schedule and delete these existing Pods.
-func (sim *Simulator) syncClusterResourceList(resourceList ResourceTypes) ([]simontype.UnscheduledPod, error) {
+func (sim *Simulator) syncClusterResourceList(resourceList *ResourceTypes, podPath string) ([]simontype.UnscheduledPod, error) {
 	//sync node
 	sort.Slice(resourceList.Nodes, func(i, j int) bool {
 		return resourceList.Nodes[i].Name < resourceList.Nodes[j].Name
 	})
-	randomIndex := rand.Perm(len(resourceList.Nodes))
-	for i := 0; i < len(randomIndex); i++ {
-		idx := randomIndex[i]
-		resourceList.Nodes[i].Name = fmt.Sprintf("%04d-", idx) + resourceList.Nodes[i].Name
-	}
+	// randomIndex := rand.Perm(len(resourceList.Nodes))
+	// for i := 0; i < len(randomIndex); i++ {
+	// 	idx := randomIndex[i]
+	// 	resourceList.Nodes[i].Name = fmt.Sprintf("%04d-", idx) + resourceList.Nodes[i].Name
+	// }
 	for i, item := range resourceList.Nodes {
 		log.Debugf("[%d] attempt to create node(%s)\n", i, item.Name)
 		if _, err := sim.client.CoreV1().Nodes().Create(sim.ctx, item, metav1.CreateOptions{}); err != nil {
@@ -555,8 +675,28 @@ func (sim *Simulator) syncClusterResourceList(resourceList ResourceTypes) ([]sim
 	}
 
 	// sync pods
+	return sim.syncPod(resourceList.Pods), nil
+
+	// paths, err := utils.ParseFilePath(podPath)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// sort.Strings(paths)
+	// for _, path := range paths {
+	// 	podCluster, err := CreateClusterResourceFromClusterConfig(path)
+	// 	if err != nil {
+	// 		continue
+	// 	}
+	// 	sim.SortClusterPods(podCluster.Pods)
+	// 	sim.syncPod(podCluster.Pods)
+	// }
+	// return nil, nil
+}
+
+func (sim *Simulator) syncPod(pods []*corev1.Pod) []simontype.UnscheduledPod {
+	// sync pods
 	var podEvents []*corev1.Pod
-	for _, p := range resourceList.Pods {
+	for _, p := range pods {
 		// pod creation event
 		podCreate := p.DeepCopy()
 		delete(podCreate.Annotations, gpushareutils.DeletionTime)
@@ -593,9 +733,7 @@ func (sim *Simulator) syncClusterResourceList(resourceList ResourceTypes) ([]sim
 		// undefined goes before all, see simulator.TestSortPodsByTimestamp
 		return ti.Before(tj)
 	})
-	failedPods := sim.SchedulePods(podEvents)
-
-	return failedPods, nil
+	return sim.SchedulePods(podEvents)
 }
 
 // WithKubeConfig sets kubeconfig for Simulator, the default value is ""
@@ -752,21 +890,21 @@ func CreateClusterResourceFromClient(client externalclientset.Interface) (Resour
 }
 
 // CreateClusterResourceFromClusterConfig return a ResourceTypes struct based on the cluster config
-func CreateClusterResourceFromClusterConfig(path string) (ResourceTypes, error) {
+func CreateClusterResourceFromClusterConfig(path string) (*ResourceTypes, error) {
 	var resource ResourceTypes
 	var content []string
 	var err error
 
 	if content, err = utils.GetYamlContentFromDirectory(path); err != nil {
-		return ResourceTypes{}, fmt.Errorf("failed to get the yaml content from the cluster directory(%s): %v", path, err)
+		return &ResourceTypes{}, fmt.Errorf("failed to get the yaml content from the cluster directory(%s): %v", path, err)
 	}
 	if resource, err = GetObjectFromYamlContent(content); err != nil {
-		return resource, err
+		return &resource, err
 	}
 
 	MatchAndSetLocalStorageAnnotationOnNode(resource.Nodes, path)
 
-	return resource, nil
+	return &resource, nil
 }
 
 func ownedByDeployment(refs []metav1.OwnerReference) bool {

@@ -1,0 +1,1 @@
+find . -name "analysis_grep.out"| xargs grep -o -E "gpuUtils: [0-9]+"

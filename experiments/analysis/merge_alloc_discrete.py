@@ -3,7 +3,7 @@ import pandas as pd
 from pathlib import Path
 
 RESULTDIR="analysis_results"
-DATADIR="data"
+DATADIR="data1"
 
 filepath = os.path.abspath(__file__)
 root = Path(filepath).parents[1] # 0524
@@ -84,7 +84,8 @@ for fdir in fileDirs:
         for tdir in tuneDirs:
             seedDirs = sorted([x for x in tdir.iterdir() if x.is_dir()])
             for sdir in seedDirs:
-                afile = fdir / pdir / tdir / sdir / 'analysis_allo.csv'
+                # afile = fdir / pdir / tdir / sdir / 'analysis_allo.csv'
+                afile = fdir / pdir / tdir / 'analysis_allo.csv'
                 print(afile)
                 if not afile.is_file():
                     continue
@@ -107,14 +108,15 @@ for fdir in fileDirs:
                     dfn["workload"] = fdir.name
                     dfn["sc_policy"] = pdir.name
                     dfn['tune']= tdir.name
-                    dfn['seed'] = sdir.name
                     dfn['total_gpus'] = total_gpu_num
+                    dfn['seed'] = 'snapshot'
                     for arrr in range(0, 131, 1):
                         dfv = df[df.arrive_ratio==arrr]
                         if len(dfv) == 0:
                             dfv = df[(df.arrive_ratio>=arrr-1)&(df.arrive_ratio<=arrr+1)]
                             if len(dfv) == 0:
-                                # print("No data:", arrr)
+                                print("No data:", arrr)
+                                dfn[arrr] = dfn[arrr-1]
                                 continue
                         val = round(dfv.alloc_ratio.mean(), 2)
                         dfn[arrr] = val

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Based on trace files in csv/, we will generate 23 trace folders (in parallel) that will be used as input folder for the simulator
-for file in csv/openb_pod_list*; do
+for file in sort_csv/openb_pod_list*; do
     echo $file
     # Create trace folders with the name of csv trace file (without .csv)
     filename="${file##*/}"

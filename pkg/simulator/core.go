@@ -2,7 +2,6 @@ package simulator
 
 import (
 	"fmt"
-	"math/rand"
 	"os"
 
 	log "github.com/sirupsen/logrus"
@@ -14,7 +13,7 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 
 	"github.com/hkust-adsl/kubernetes-scheduler-simulator/pkg/api/v1alpha1"
-	"github.com/hkust-adsl/kubernetes-scheduler-simulator/pkg/type"
+	simontype "github.com/hkust-adsl/kubernetes-scheduler-simulator/pkg/type"
 	"github.com/hkust-adsl/kubernetes-scheduler-simulator/pkg/utils"
 )
 
@@ -40,9 +39,10 @@ type AppResource struct {
 }
 
 type Interface interface {
-	RunCluster(cluster ResourceTypes) ([]simontype.UnscheduledPod, error)
+	RunCluster(cluster *ResourceTypes, podPath string) ([]simontype.UnscheduledPod, error)
 	ScheduleApp(AppResource) ([]simontype.UnscheduledPod, error)
 	SchedulePods(pods []*corev1.Pod) []simontype.UnscheduledPod
+	Start()
 
 	ClusterAnalysis(tag string) (utils.FragAmount, []utils.ResourceSummary)
 	ClusterGpuFragReport()
@@ -79,7 +79,7 @@ type Interface interface {
 // The SimulateResult information includes:
 // 1. UnscheduledPods - represents unscheduled Pods. If the value is empty, it means that the simulation scheduling was successful.
 // 2. NodeStatus - will record the Pod situation on each Node in detail.
-func Simulate(cluster ResourceTypes, apps []AppResource, opts ...Option) (*simontype.SimulateResult, error) {
+func Simulate(cluster *ResourceTypes, apps []AppResource, podPath string, opts ...Option) (*simontype.SimulateResult, error) {
 	// init simulator
 	sim, err := New(opts...)
 	if err != nil {
@@ -95,12 +95,12 @@ func Simulate(cluster ResourceTypes, apps []AppResource, opts ...Option) (*simon
 	log.Infof("Number of original workload pods: %d", len(cluster.Pods))
 	sim.SetWorkloadPods(cluster.Pods)
 	sim.SetTypicalPods()
-	sim.SetSkylinePods()
+	// sim.SetSkylinePods()
 	sim.ClusterGpuFragReport()
 
 	customConfig := sim.GetCustomConfig()
-	rand.Seed(customConfig.WorkloadTuningConfig.Seed)
-	log.Debugf("Random Seed: %d, Random Int: %d", customConfig.WorkloadTuningConfig.Seed, rand.Int())
+	// rand.Seed(customConfig.WorkloadTuningConfig.Seed)
+	// log.Debugf("Random Seed: %d, Random Int: %d", customConfig.WorkloadTuningConfig.Seed, rand.Int())
 	for _, item := range cluster.DaemonSets {
 		validPods, err := utils.MakeValidPodsByDaemonset(item, cluster.Nodes)
 		if err != nil {
@@ -113,34 +113,45 @@ func Simulate(cluster ResourceTypes, apps []AppResource, opts ...Option) (*simon
 
 	// run cluster
 	sim.SortClusterPods(cluster.Pods)
+	// 将pod和node的资源量记录在sim中
 	sim.RecordPodTotalResourceReq(cluster.Pods)
 	sim.RecordNodeTotalResource(cluster.Nodes)
 
-	if customConfig.WorkloadTuningConfig.Ratio > 0 {
-		// <= 0 means no tuning, keeping the cluster.Pods == sim.workloadPods
-		cluster.Pods = sim.TunePodsByNodeTotalResource(cluster.Pods, customConfig.WorkloadTuningConfig)
-	}
+	// if customConfig.WorkloadTuningConfig.Ratio > 0 {
+	// 	// <= 0 means no tuning, keeping the cluster.Pods == sim.workloadPods
+	// 	cluster.Pods = sim.TunePodsByNodeTotalResource(cluster.Pods, customConfig.WorkloadTuningConfig)
+	// }
 
-	unscheduledPods, err := sim.RunCluster(cluster) // Existing pods in the cluster are scheduled here.
-	if err != nil {
-		return nil, err
-	}
+	sim.Start()
+	unscheduledPods, _ := sim.RunCluster(cluster, podPath) // Existing pods in the cluster are scheduled here.
+	// paths, err := utils.ParseFilePath(podPath)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// sort.Strings(paths)
+	// for _, path := range paths {
+	// 	podCluster, err := CreateClusterResourceFromClusterConfig(path)
+	// 	if err != nil {
+	// 		continue
+	// 	}
+	// 	sim.SortClusterPods(podCluster.Pods)
+	// }
 	failedPods = append(failedPods, unscheduledPods...)
 	utils.ReportFailedPods(failedPods)
 	sim.ClusterAnalysis(TagInitSchedule)
 
-	// export a cluster snapshot after scheduling
-	if customConfig.ExportConfig.PodSnapshotYamlFilePrefix != "" {
-		// filePath: prefix/InitSchedule/pod-snapshot.yaml
-		prefix := customConfig.ExportConfig.PodSnapshotYamlFilePrefix
-		fileDir := fmt.Sprintf("%s/%s", prefix, TagInitSchedule)
-		if e := os.MkdirAll(fileDir, os.FileMode(0777)); e != nil {
-			log.Errorf("MkdirAll(%s, 0777) failed: %s", fileDir, e.Error())
-		} else {
-			filePath := fmt.Sprintf("%s/%s", fileDir, "pod-snapshot.yaml")
-			sim.ExportPodSnapshotInYaml(unscheduledPods, filePath)
-		}
-	}
+	// // export a cluster snapshot after scheduling
+	// if customConfig.ExportConfig.PodSnapshotYamlFilePrefix != "" {
+	// 	// filePath: prefix/InitSchedule/pod-snapshot.yaml
+	// 	prefix := customConfig.ExportConfig.PodSnapshotYamlFilePrefix
+	// 	fileDir := fmt.Sprintf("%s/%s", prefix, TagInitSchedule)
+	// 	if e := os.MkdirAll(fileDir, os.FileMode(0777)); e != nil {
+	// 		log.Errorf("MkdirAll(%s, 0777) failed: %s", fileDir, e.Error())
+	// 	} else {
+	// 		filePath := fmt.Sprintf("%s/%s", fileDir, "pod-snapshot.yaml")
+	// 		sim.ExportPodSnapshotInYaml(unscheduledPods, filePath)
+	// 	}
+	// }
 	if customConfig.ExportConfig.NodeSnapshotCSVFilePrefix != "" {
 		// filePath: prefix/InitSchedule/node-snapshot.csv
 		prefix := customConfig.ExportConfig.NodeSnapshotCSVFilePrefix
@@ -155,71 +166,71 @@ func Simulate(cluster ResourceTypes, apps []AppResource, opts ...Option) (*simon
 		}
 	}
 
-	if customConfig.WorkloadInflationConfig.Ratio > 1 {
-		sim.RunWorkloadInflationEvaluation(TagScheduleInflation)
-	}
+	// if customConfig.WorkloadInflationConfig.Ratio > 1 {
+	// 	sim.RunWorkloadInflationEvaluation(TagScheduleInflation)
+	// }
 
-	if customConfig.NewWorkloadConfig != "" {
-		resources, err := CreateClusterResourceFromClusterConfig(customConfig.NewWorkloadConfig)
-		if err != nil {
-			return nil, err
-		}
-		newWorkloadPods, err := GetValidPodExcludeDaemonSet(resources)
-		if err != nil {
-			return nil, err
-		}
-		log.Infof("Number of new workload pods: %d\n", len(newWorkloadPods))
-		sim.SetWorkloadPods(newWorkloadPods)
-		sim.SetTypicalPods()
-		sim.ClusterGpuFragReport()
-	}
+	// if customConfig.NewWorkloadConfig != "" {
+	// 	resources, err := CreateClusterResourceFromClusterConfig(customConfig.NewWorkloadConfig)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	newWorkloadPods, err := GetValidPodExcludeDaemonSet(resources)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	log.Infof("Number of new workload pods: %d\n", len(newWorkloadPods))
+	// 	sim.SetWorkloadPods(newWorkloadPods)
+	// 	sim.SetTypicalPods()
+	// 	sim.ClusterGpuFragReport()
+	// }
 
-	// evict some pods in the cluster and reschedule them
-	if customConfig.DescheduleConfig.Policy != "" {
-		unscheduledPods = sim.DescheduleCluster()
-		failedPods = append(failedPods, unscheduledPods...)
-		sim.ClusterAnalysis(TagPostDeschedule)
-		sim.ClusterGpuFragReport()
+	// // evict some pods in the cluster and reschedule them
+	// if customConfig.DescheduleConfig.Policy != "" {
+	// 	unscheduledPods = sim.DescheduleCluster()
+	// 	failedPods = append(failedPods, unscheduledPods...)
+	// 	sim.ClusterAnalysis(TagPostDeschedule)
+	// 	sim.ClusterGpuFragReport()
 
-		if customConfig.ExportConfig.PodSnapshotYamlFilePrefix != "" {
-			// filePath: prefix/PostDeschedule/pod-snapshot.yaml
-			prefix := customConfig.ExportConfig.PodSnapshotYamlFilePrefix
-			fileDir := fmt.Sprintf("%s/%s", prefix, TagPostDeschedule)
-			if e := os.MkdirAll(fileDir, os.FileMode(0777)); e != nil {
-				log.Errorf("MkdirAll(%s, 0777) failed: %s", fileDir, e.Error())
-			} else {
-				filePath := fmt.Sprintf("%s/%s", fileDir, "pod-snapshot.yaml")
-				sim.ExportPodSnapshotInYaml(unscheduledPods, filePath)
-			}
-		}
-		if customConfig.ExportConfig.NodeSnapshotCSVFilePrefix != "" {
-			// filePath: prefix/PostDeschedule/node-snapshot.csv
-			prefix := customConfig.ExportConfig.NodeSnapshotCSVFilePrefix
-			fileDir := fmt.Sprintf("%s/%s", prefix, TagPostDeschedule)
-			if e := os.MkdirAll(fileDir, os.FileMode(0777)); e != nil {
-				log.Errorf("MkdirAll(%s, 0777) failed: %s", fileDir, e.Error())
-			} else {
-				filePath := fmt.Sprintf("%s/%s", fileDir, "node-snapshot.csv")
-				sim.ExportNodeSnapshotInCSV(filePath)
-				podFilePath := fmt.Sprintf("%s/%s", fileDir, "pod-snapshot.csv")
-				sim.ExportNodeSnapshotInCSV(podFilePath)
-			}
-		}
-	}
-	if customConfig.NewWorkloadConfig != "" || customConfig.DescheduleConfig.Policy != "" {
-		if customConfig.WorkloadInflationConfig.Ratio > 1 {
-			sim.RunWorkloadInflationEvaluation(TagDescheduleInflation)
-		}
-	}
+	// 	if customConfig.ExportConfig.PodSnapshotYamlFilePrefix != "" {
+	// 		// filePath: prefix/PostDeschedule/pod-snapshot.yaml
+	// 		prefix := customConfig.ExportConfig.PodSnapshotYamlFilePrefix
+	// 		fileDir := fmt.Sprintf("%s/%s", prefix, TagPostDeschedule)
+	// 		if e := os.MkdirAll(fileDir, os.FileMode(0777)); e != nil {
+	// 			log.Errorf("MkdirAll(%s, 0777) failed: %s", fileDir, e.Error())
+	// 		} else {
+	// 			filePath := fmt.Sprintf("%s/%s", fileDir, "pod-snapshot.yaml")
+	// 			sim.ExportPodSnapshotInYaml(unscheduledPods, filePath)
+	// 		}
+	// 	}
+	// 	if customConfig.ExportConfig.NodeSnapshotCSVFilePrefix != "" {
+	// 		// filePath: prefix/PostDeschedule/node-snapshot.csv
+	// 		prefix := customConfig.ExportConfig.NodeSnapshotCSVFilePrefix
+	// 		fileDir := fmt.Sprintf("%s/%s", prefix, TagPostDeschedule)
+	// 		if e := os.MkdirAll(fileDir, os.FileMode(0777)); e != nil {
+	// 			log.Errorf("MkdirAll(%s, 0777) failed: %s", fileDir, e.Error())
+	// 		} else {
+	// 			filePath := fmt.Sprintf("%s/%s", fileDir, "node-snapshot.csv")
+	// 			sim.ExportNodeSnapshotInCSV(filePath)
+	// 			podFilePath := fmt.Sprintf("%s/%s", fileDir, "pod-snapshot.csv")
+	// 			sim.ExportNodeSnapshotInCSV(podFilePath)
+	// 		}
+	// 	}
+	// }
+	// if customConfig.NewWorkloadConfig != "" || customConfig.DescheduleConfig.Policy != "" {
+	// 	if customConfig.WorkloadInflationConfig.Ratio > 1 {
+	// 		sim.RunWorkloadInflationEvaluation(TagDescheduleInflation)
+	// 	}
+	// }
 
-	// schedule pods
-	for _, app := range apps {
-		unscheduledPods, err = sim.ScheduleApp(app)
-		if err != nil {
-			return nil, err
-		}
-		failedPods = append(failedPods, unscheduledPods...)
-	}
+	// // schedule pods
+	// for _, app := range apps {
+	// 	unscheduledPods, err = sim.ScheduleApp(app)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	failedPods = append(failedPods, unscheduledPods...)
+	// }
 
 	return &simontype.SimulateResult{
 		UnscheduledPods: failedPods,

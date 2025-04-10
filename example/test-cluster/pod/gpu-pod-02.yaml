@@ -5,7 +5,10 @@ metadata:
   namespace: pai-gpu
   annotations:
     alibabacloud.com/gpu-milli: "1000"
-    alibabacloud.com/gpu-count: "2"
+    alibabacloud.com/gpu-count: "1"
+    plan_time: "100.00000"
+    start-time: '1100.000'
+    end-time: '9000.000'
 spec:
     containers:
     - image: tensorflow:latest

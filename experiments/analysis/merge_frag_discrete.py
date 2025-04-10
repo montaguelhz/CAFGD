@@ -46,8 +46,8 @@ for fdir in fileDirs:
         for tdir in tuneDirs:
             seedDirs = sorted([x for x in tdir.iterdir() if x.is_dir()])
             for sdir in seedDirs:
-                afile = fdir / pdir / tdir / sdir / 'analysis_allo.csv'
-                ffile = fdir / pdir / tdir / sdir / 'analysis_frag.csv'
+                afile = fdir / pdir / tdir  / 'analysis_allo.csv'
+                ffile = fdir / pdir / tdir  / 'analysis_frag.csv'
                 print(afile)
                 if not afile.is_file():
                     continue

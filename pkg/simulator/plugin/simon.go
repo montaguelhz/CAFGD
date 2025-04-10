@@ -77,12 +77,12 @@ func (plugin *SimonPlugin) ScoreExtensions() framework.ScoreExtensions {
 
 // NormalizeScore invoked after scoring all nodes.
 func (plugin *SimonPlugin) NormalizeScore(ctx context.Context, state *framework.CycleState, pod *corev1.Pod, scores framework.NodeScoreList) *framework.Status {
-	return NormalizeScore(scores)
+	return NormalizeScore(scores, pod)
 }
 
 // BindPodToNode bind pod to a node and trigger pod update event
 func (plugin *SimonPlugin) BindPodToNode(ctx context.Context, state *framework.CycleState, p *corev1.Pod, nodeName string) *framework.Status {
-	log.Debugf("bind pod(%s) to node(%s)\n", utils.GeneratePodKey(p), nodeName)
+	log.Infof("bind pod(%s) to node(%s)\n", utils.GeneratePodKey(p), nodeName)
 	switch t := plugin.handle.ClientSet().(type) {
 	case *externalclientset.Clientset:
 		// production env

@@ -9,8 +9,8 @@ from utils import parse_workload_name, POLICY_ABBR_DICT
 
 PAPER_PLOT=True # False: Plot with thinner lines for Presentation
 SAVEFIG=True   # False: plt.show()
-TUNE_RATIO = 1.3
-FIGNAME = "openb_alloc.pdf"
+TUNE_RATIO = 0
+FIGNAME = "static_alloc_bar.png"
 
 workload = 'openb_pod_list_default'
 
@@ -42,7 +42,8 @@ for type, file in FILEDICT.items():
     # display(dfn)
     # print("SC_POLICY_LIST=[%s]" % (",".join("'%s'" % x for x in list(dfn.sc_policy.unique()))))
 
-    dfn13 = dfn[dfn.tune == TUNE_RATIO].copy()
+    # dfn13 = dfn[dfn.tune == TUNE_RATIO].copy()
+    dfn13 = dfn.copy()
     cols = list(dfn13.columns)
     for col in ['workload','sc_policy','tune','seed','total_gpus']:
         if col in cols:
@@ -63,23 +64,26 @@ for type, file in FILEDICT.items():
 
 # openb, production workloads:
 
-policy_keep = ['Random', 'DotProd', 'Clustering', 'Packing', 'BestFit', 'FGD']
-policy_keepr = ['FGD', 'BestFit', 'Packing', 'Clustering', 'DotProd', 'Random']
-
+policy_keep = ['Random', 'DotProd', 'Clustering','Packing', 'BestFit', 'FGD', 'CAFGD-M']
+policy_keepr = ['CAFGD-M','FGD',  'BestFit','Packing','Clustering', 'DotProd', 'Random']
+# policy_keep = ['FGD', 'CAFGD']
+# policy_keepr = ['CAFGD','FGD']
 TYPE=list(FILEDICT.keys())[0]
 # ['alloc', 'frag_amount', 'frag_ratio']
 dfnp = dfp_dict[TYPE]
 
 colors = sns.color_palette()
 colors.reverse()
-colors = colors[-6:]
+colors = colors[-7:]
 
 if TYPE=='alloc':
     dfnpp = dfnp[dfnp.workload==workload].copy()
     # print(dfnpp[dfnpp.arrive_rate==100].groupby(by='sc_policy').mean())
-    dfnpp = dfnpp[dfnpp.sc_policy.isin(policy_keep)]
+    # dfnpp = dfnpp[dfnpp.sc_policy.isin(policy_keep)]
 
-    plt.figure(figsize=(10, 3.5), dpi=120)
+    print(dfnpp)
+
+    plt.figure(figsize=(10, 4), dpi=120)
     sns.lineplot(data=dfnpp, x='arrive_rate', y='alloc_rate_reverse', hue='sc_policy', 
     style='sc_policy', estimator='median', errorbar=("pi", 50), 
     hue_order=policy_keep, style_order=policy_keepr, palette=colors)
@@ -97,10 +101,10 @@ if TYPE=='alloc':
         plt.xlabel('Arrived workloads (in % of cluster GPU capacity)')
         plt.legend(loc='upper left', bbox_to_anchor=(1, 1.05), 
             prop={'size': 20}, frameon=False, borderpad=0)
-        yhead = 25
-        plt.xlim(100-yhead, 120)
-        plt.ylim(0, yhead)
-        plt.yticks([0,5,10,15,20,25])
+        # plt.xlim(6000, 7000)
+        plt.xlim(70, 120)
+        plt.ylim(0, 30)
+        plt.yticks([10,20,30])
     else:
         plt.ylabel('Unallocated GPU (%)')
         plt.legend(ncol=3)

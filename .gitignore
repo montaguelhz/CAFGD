@@ -6,6 +6,9 @@
 *.tgz
 *.tar
 *.log
+*.out
+*.yaml
+
 
 # Python compiled files
 __pycache__
@@ -14,3 +17,8 @@ __pycache__
 
 # binary
 bin/*
+
+gpu2020/*
+experiments/20*
+experiments/data*
+analysis/data/*

@@ -1,6 +1,7 @@
 package simulator
 
 import (
+	"fmt"
 	"math"
 	"sync"
 
@@ -39,6 +40,8 @@ func (sim *Simulator) ClusterGpuFragReport() {
 	var clusterTotalGpus int      // num. of total GPUs in the cluster
 
 	var nodeCnt int = 0
+	usedGpuMap := make(map[int64]int)
+	usedNodeGpuMap := make(map[int64]int)
 	for _, ns := range nodeStatus {
 		if nodeRes, ok := sim.nodeResourceMap[ns.Node.Name]; ok {
 			clusterFragAmount.AddFragAmount(sim.NodeGpuFragAmount(nodeRes)) // easy to calculate. The regular Frag definition
@@ -49,29 +52,51 @@ func (sim *Simulator) ClusterGpuFragReport() {
 			clusterTotalGpus += nodeRes.GpuNumber
 			if nodeRes.GetFullyFreeGpuNum() < nodeRes.GpuNumber || nodeRes.MilliCpuLeft < nodeRes.MilliCpuCapacity { // the node is used
 				clusterUsedNodes += 1
-				clusterUsedGpus += nodeRes.GpuNumber // treat all GPUs on that node are "used"
+				// clusterUsedGpus += nodeRes.GpuNumber // treat all GPUs on that node are "used"
 				clusterUsedGpuMilli += int64(nodeRes.GpuNumber*gpushareutils.MILLI) - nodeRes.GetTotalMilliGpuLeft()
+				count := 0
+				for _, v := range nodeRes.MilliGpuLeftList {
+					if v != 0 && v != 1000 {
+						usedGpuMap[v]++
+					}
+					if v != 1000 {
+						count++
+					}
+				}
+				clusterUsedGpus += count
+				usedNodeGpuMap[int64(count)]++
 			}
 		}
 		nodeCnt += 1
 	}
 
-	var idleGpuMilli float64 // milli GPUs idle in the cluster
-	for _, v := range clusterFragAmount.Data {
-		idleGpuMilli += v
-	}
-	log.Debugf("[DEBUG][plugin.ClusterGpuFragReport] idleGpuMilli of %d nodes: %.2f\n", nodeCnt, idleGpuMilli)
+	// var idleGpuMilli float64 // milli GPUs idle in the cluster
+	// for _, v := range clusterFragAmount.Data {
+	// 	idleGpuMilli += v
+	// }
+	// log.Debugf("[DEBUG][plugin.ClusterGpuFragReport] idleGpuMilli of %d nodes: %.2f\n", nodeCnt, idleGpuMilli)
 
-	fragGpuMilli := clusterFragAmount.FragAmountSumExceptQ3()
-	fragGpuRatio := 100 * fragGpuMilli / idleGpuMilli
-	q124GpuRatio := 100 * clusterFragAmount.FragAmountSumQ1Q2Q4() / idleGpuMilli
-	log.Infof("[Report]; Frag amount: %.2f; Frag ratio: %.2f%%; Q124 ratio: %.2f%%; (origin)\n", fragGpuMilli, fragGpuRatio, q124GpuRatio)
-	log.Infof("[Report]; Frag amount: %.2f; Frag ratio: %.2f%%; (bellman)\n", clusterFragBellman, 100*clusterFragBellman/idleGpuMilli)
+	// fragGpuMilli := clusterFragAmount.FragAmountSumExceptQ3()
+	// fragGpuRatio := 100 * fragGpuMilli / idleGpuMilli
+	// q124GpuRatio := 100 * clusterFragAmount.FragAmountSumQ1Q2Q4() / idleGpuMilli
+	// log.Infof("[Report]; Frag amount: %.2f; Frag ratio: %.2f%%; Q124 ratio: %.2f%%; (origin)\n", fragGpuMilli, fragGpuRatio, q124GpuRatio)
+	// log.Infof("[Report]; Frag amount: %.2f; Frag ratio: %.2f%%; (bellman)\n", clusterFragBellman, 100*clusterFragBellman/idleGpuMilli)
 
 	//if clusterTotalGpus*gpushareutils.MILLI-int(idleGpuMilli) != int(clusterUsedGpuMilli) { // this prints unnecessary logs due to the int rounding error
 	//	log.Errorf("totalGpuMilli (%d) - idleGpuMilli (%d) != usedGpuMilli (%d)", clusterTotalGpus*gpushareutils.MILLI, idleGpuMilli, clusterUsedGpuMilli)
 	//}
 	log.Infof("[Alloc]; Used nodes: %d; Used GPUs: %d; Used GPU Milli: %d; Total GPUs: %d; Arrived GPU Milli: %d\n", clusterUsedNodes, clusterUsedGpus, clusterUsedGpuMilli, clusterTotalGpus, sim.arrPodGpuMilli)
+	s := "[Alloc]; part used GPU: "
+	for k, v := range usedGpuMap {
+		s += fmt.Sprintf("%d:%d ", k, v)
+	}
+	s += "part used Node: "
+	for k, v := range usedNodeGpuMap {
+		s += fmt.Sprintf("%d:%d ", k, v)
+	}
+	log.Info(s)
+	sim.fakeTime.UsedGpus = clusterUsedGpus
+	sim.fakeTime.AllGpus = clusterTotalGpus
 }
 
 func (sim *Simulator) ReportFragBasedOnSkyline() {
@@ -151,6 +176,10 @@ func (sim *Simulator) ClusterAnalysis(tag string) (utils.FragAmount, []utils.Res
 	log.Infof("%-13s: %6.2f x 10^3 (100.0%%)\n", "idle_gpu_milli", gpuFragSum/1000)
 	val := clusterFragAmount.FragAmountSumExceptQ3()
 	log.Infof("%-13s: %6.2f x 10^3 (%5.2f%%)\n", "frag_gpu_milli", val/1000, 100*val/gpuFragSum)
+	log.Infoln("--------------------")
+
+	sim.FakeTimeReport()
+
 	log.Infoln("==============================================")
 	log.Infoln()
 
@@ -216,6 +245,8 @@ func (sim *Simulator) RecordNodeTotalResource(nodes []*corev1.Node) (int64, int6
 
 func (sim *Simulator) SetTypicalPods() {
 	sim.typicalPods = utils.GetTypicalPods(sim.workloadPods, sim.customConfig.TypicalPodsConfig)
+	sim.typicalPodsByTime = utils.GetTypicalPodsByTime(sim.workloadPods, sim.customConfig.TypicalPodsConfig)
+	// sim.typicalPods = sim.typicalPodsByTime
 	if sumRatio := utils.PodListRatioSum(sim.typicalPods); math.Abs(sumRatio-1) > 1e-3 {
 		log.Errorf("sim.SetTypicalPods: (%.4f != 1.0): %v\n", sumRatio, sim.typicalPods)
 	}
@@ -232,4 +263,14 @@ func (sim *Simulator) NodeGpuFragAmountMap(nodeResourceMap map[string]simontype.
 		nodeFragAmountMap[nodeName] = sim.NodeGpuFragAmount(nodeRes)
 	}
 	return nodeFragAmountMap
+}
+
+func (sim *Simulator) FakeTimeReport() {
+	log.Infoln("------------fake time----------------")
+	log.Infof("end time: %d", sim.fakeTime.EndTime())
+	log.Infof("sim.fakeTime.Throughput: %f, gpuUtils: %f \n", sim.fakeTime.Throughput(), sim.fakeTime.GpuUtils())
+	log.Infof("sim.fakeTime.Throughput after all: %f, gpuUtils after all: %f\n", sim.fakeTime.ThroughputAfterAll(), sim.fakeTime.GpuUtilsAfterAll())
+	c, r := sim.fakeTime.GetPodNum()
+	log.Infof("sim.fakeTime completed:%d, running:%d, success:%d, failed:%d, CpuLack:%d, GpuOrBothLack:%d\n", c, r, c+r, sim.fakeTime.FailedPodNum, sim.fakeTime.FailedPodNumByCpuLack, sim.fakeTime.FailedPodNumByGpuLack)
+	log.Infoln("-------------------------------------")
 }

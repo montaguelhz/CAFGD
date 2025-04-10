@@ -99,9 +99,9 @@ func calculateDotProductScore(nodeRes simontype.NodeResource, podRes simontype.P
 	return int64(float64(framework.MaxNodeScore) * score), gpuId
 }
 
-func allocateGpuIdBasedOnDotProduct(nodeRes simontype.NodeResource, podRes simontype.PodResource,
-	cfg simontype.GpuPluginCfg, _ *simontype.TargetPodList) (gpuId string) {
+func allocateGpuIdBasedOnDotProduct(nodeRes simontype.NodeResource, podRes simontype.PodResWithTime,
+	cfg simontype.GpuPluginCfg, _ simontype.AllocateGpuIdArgs) (gpuId string) {
 
-	_, gpuId = calculateDotProductScore(nodeRes, podRes, cfg)
+	_, gpuId = calculateDotProductScore(nodeRes, podRes.PodRes, cfg)
 	return gpuId
 }

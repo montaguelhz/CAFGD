@@ -57,7 +57,12 @@ func (plugin *FGDScorePlugin) Score(ctx context.Context, state *framework.CycleS
 
 func (plugin *FGDScorePlugin) ScoreExtensions() framework.ScoreExtensions {
 	return nil
+	// return plugin
 }
+
+// func (plugin *FGDScorePlugin) NormalizeScore(ctx context.Context, state *framework.CycleState, p *corev1.Pod, scores framework.NodeScoreList) *framework.Status {
+// 	return NormalizeScore(scores, p)
+// }
 
 func calculateGpuShareFragExtendScore(nodeRes simontype.NodeResource, podRes simontype.PodResource, typicalPods *simontype.TargetPodList) (score int64, gpuId string) {
 	nodeGpuShareFragScore := utils.NodeGpuShareFragAmountScore(nodeRes, *typicalPods)
@@ -78,13 +83,17 @@ func calculateGpuShareFragExtendScore(nodeRes simontype.NodeResource, podRes sim
 		}
 		return score, gpuId
 	} else {
+
+		// gpuId := simontype.AllocateExclusiveGpuId(nodeRes, podRes)
+		// return getBestFitScore(nodeRes, podRes), gpuId
+
 		newNodeRes, _ := nodeRes.Sub(podRes)
 		newNodeGpuShareFragScore := utils.NodeGpuShareFragAmountScore(newNodeRes, *typicalPods)
 		return int64(sigmoid((nodeGpuShareFragScore-newNodeGpuShareFragScore)/1000) * float64(framework.MaxNodeScore)), simontype.AllocateExclusiveGpuId(nodeRes, podRes)
 	}
 }
 
-func allocateGpuIdBasedOnFGDScore(nodeRes simontype.NodeResource, podRes simontype.PodResource, _ simontype.GpuPluginCfg, typicalPods *simontype.TargetPodList) (gpuId string) {
-	_, gpuId = calculateGpuShareFragExtendScore(nodeRes, podRes, typicalPods)
+func allocateGpuIdBasedOnFGDScore(nodeRes simontype.NodeResource, podRes simontype.PodResWithTime, _ simontype.GpuPluginCfg, args simontype.AllocateGpuIdArgs) (gpuId string) {
+	_, gpuId = calculateGpuShareFragExtendScore(nodeRes, podRes.PodRes, args.TargetPodList)
 	return gpuId
 }

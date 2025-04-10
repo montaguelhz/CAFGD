@@ -8,6 +8,7 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/kubernetes/pkg/scheduler/framework"
 
 	"github.com/hkust-adsl/kubernetes-scheduler-simulator/pkg/api/v1alpha1"
 	simontype "github.com/hkust-adsl/kubernetes-scheduler-simulator/pkg/type"
@@ -166,6 +167,82 @@ func NodeGpuShareFragAmount(nodeRes simontype.NodeResource, typicalPods simontyp
 	return fragAmount
 }
 
+func NodeGpuShareFragAmountPP(nodeRes simontype.NodeResource, typicalPods *simontype.NewTypicalPodMap) FragAmount {
+	typicalPods.RW.Lock()
+	defer typicalPods.RW.Unlock()
+	data := make([]float64, len(FragRatioDataMap))
+	fragAmount := NewFragAmount(nodeRes.NodeName, data)
+	for res, value := range typicalPods.PodMap {
+		freq := float64(value) / float64(typicalPods.WinSize)
+		fragType := GetNodePodFrag(nodeRes, res)
+		gpuMilliLeftTotal := GetGpuMilliLeftTotal(nodeRes)
+		if fragType == Q3Satisfied { // Part of GPUs are treated as Lack GPU fragment
+			gpuFragMilli := GetGpuFragMilliByNodeResAndPodRes(nodeRes, res)
+			fragAmount.AddByFragType(Q2LackGpu, freq*float64(gpuFragMilli))
+			fragAmount.AddByFragType(Q3Satisfied, freq*float64(gpuMilliLeftTotal-gpuFragMilli))
+		} else { // Q1, Q2, XL, XR, NA => all idle GPU resources are treated as fragment
+			fragAmount.AddByFragType(fragType, freq*float64(gpuMilliLeftTotal))
+		}
+	}
+	return fragAmount
+}
+
+func PreNodeGpuShareFragAmountPP(nodeRes simontype.NodeResource, typicalPods *simontype.NewTypicalPodMap) FragAmount {
+	typicalPods.RW.Lock()
+	defer typicalPods.RW.Unlock()
+	data := make([]float64, len(FragRatioDataMap))
+	fragAmount := NewFragAmount(nodeRes.NodeName, data)
+	pm := make(map[simontype.PodResource]float64)
+	ratio := 1.0
+	if typicalPods.TopKPods != nil {
+		ratio = 0.3
+		for k, v := range typicalPods.TopKPods {
+			pm[k] += float64(v) / float64(typicalPods.TopKInCount) * (1 - ratio)
+		}
+	}
+	for i := 0; i < len(typicalPods.PodList); i++ {
+		pr := typicalPods.PodList[i]
+		pm[pr] += (1.5 - float64(len(typicalPods.PodList)-i)/float64(len(typicalPods.PodList))) / float64(len(typicalPods.PodList)) * ratio
+	}
+	for res, value := range pm {
+		freq := value
+		fragType := GetNodePodFrag(nodeRes, res)
+		gpuMilliLeftTotal := GetGpuMilliLeftTotal(nodeRes)
+		if fragType == Q3Satisfied { // Part of GPUs are treated as Lack GPU fragment
+			gpuFragMilli := GetGpuFragMilliByNodeResAndPodRes(nodeRes, res)
+			fragAmount.AddByFragType(Q2LackGpu, freq*float64(gpuFragMilli))
+			fragAmount.AddByFragType(Q3Satisfied, freq*float64(gpuMilliLeftTotal-gpuFragMilli))
+		} else { // Q1, Q2, XL, XR, NA => all idle GPU resources are treated as fragment
+			fragAmount.AddByFragType(fragType, freq*float64(gpuMilliLeftTotal))
+		}
+	}
+	return fragAmount
+}
+
+func NodeGpuShareFragAmountScoreBasedOnPredict(nodeRes simontype.NodeResource, predictPod *simontype.PredictPod, fakeTime *simontype.FakeTime, planTime, start, end int, handle framework.Handle, gpuIdList string, podRes simontype.PodResWithTime) (float64, float64) {
+	if !predictPod.IsReady() {
+		return NodeGpuShareFragAmountScoreBasedOnPredict6(nodeRes, predictPod, fakeTime, start, end, handle)
+	}
+
+	return NodeGpuShareFragAmountScoreBasedOnPredict5(nodeRes, predictPod, fakeTime, start, end, handle)
+
+	// if fakeTime.UsedGpus > fakeTime.AllGpus/5*4 {
+	// 	return NodeGpuShareFragAmountScoreBasedOnPredict5(nodeRes, predictPod, fakeTime, start, end, handle)
+	// } else {
+	// 	return NodeGpuShareFragAmountScoreBasedOnPredict7(nodeRes, predictPod, fakeTime, start, end, handle, gpuIdList, podRes)
+	// }
+
+}
+
+func NodeMutilGpuShareFragAmountScoreBasedOnPredict(nodeRes simontype.NodeResource, predictPod *simontype.PredictPod, fakeTime *simontype.FakeTime, planTime, start, end int, handle framework.Handle, gpuIdList string, podRes simontype.PodResWithTime) (float64, float64) {
+	if !predictPod.IsReady() {
+		return NodeGpuShareFragAmountScoreBasedOnPredict6(nodeRes, predictPod, fakeTime, start, end, handle)
+	}
+
+	return NodeMutilGpuShareFragAmountScoreBasedOnPredict1(nodeRes, predictPod, fakeTime, start, end, handle)
+	// return NodeGpuShareFragAmountScoreBasedOnPredict7(nodeRes, predictPod, fakeTime, start, end, handle, gpuIdList, podRes)
+}
+
 func NodeGpuFragBasedOnSkyline(nodeRes simontype.NodeResource, skylinePods simontype.SkylinePodList) int64 {
 	gpuMilliLeftTotal := GetGpuMilliLeftTotal(nodeRes)
 	for _, podRes := range skylinePods {
@@ -179,6 +256,75 @@ func NodeGpuFragBasedOnSkyline(nodeRes simontype.NodeResource, skylinePods simon
 func NodeGpuShareFragAmountScore(nodeRes simontype.NodeResource, typicalPods simontype.TargetPodList) float64 {
 	fragAmount := NodeGpuShareFragAmount(nodeRes, typicalPods)
 	return fragAmount.FragAmountSumExceptQ3()
+}
+
+func NodeGpuShareFragAmountScorePP(nodeRes simontype.NodeResource, typicalPods *simontype.NewTypicalPodMap) float64 {
+	fragAmount := PreNodeGpuShareFragAmountPP(nodeRes, typicalPods)
+	return fragAmount.FragAmountSumExceptQ3()
+}
+
+type fragScore struct {
+	freq         float64
+	gpuFragScore float64
+}
+
+type fragScores []fragScore
+
+//  实现sort包中Interface接口
+
+func (f fragScores) Len() int {
+	return len(f)
+}
+
+func (f fragScores) Less(i, j int) bool {
+	return f[i].gpuFragScore < f[j].gpuFragScore
+}
+
+func (f fragScores) Swap(i, j int) {
+	f[i], f[j] = f[j], f[i]
+}
+
+func NodeGpuShareFragAmountScoreTT(nodeRes simontype.NodeResource, typicalPods *simontype.NewTypicalPodMap) float64 {
+	typicalPods.RW.Lock()
+	defer typicalPods.RW.Unlock()
+	pm := make(map[simontype.PodResource]float64)
+	split := 1.0
+	if typicalPods.TopKPods != nil {
+		split = 2.0
+		for k, v := range typicalPods.TopKPods {
+			pm[k] += float64(v) / float64(typicalPods.TopKInCount) / split
+		}
+	}
+	for i := 0; i < len(typicalPods.PodList); i++ {
+		pr := typicalPods.PodList[i]
+		pm[pr] += (1.5 - float64(len(typicalPods.PodList)-i)/float64(len(typicalPods.PodList))) / float64(len(typicalPods.PodList)) / split
+	}
+	var f fragScores
+	for res, value := range pm {
+		freq := value
+		fragType := GetNodePodFrag(nodeRes, res)
+		gpuMilliLeftTotal := GetGpuMilliLeftTotal(nodeRes)
+		gpuScore := 0.0
+		if fragType == Q3Satisfied { // Part of GPUs are treated as Lack GPU fragment
+			gpuFragMilli := GetGpuFragMilliByNodeResAndPodRes(nodeRes, res)
+			gpuScore = freq * float64(gpuMilliLeftTotal-gpuFragMilli)
+		} else { // Q1, Q2, XL, XR, NA => all idle GPU resources are treated as fragment
+			gpuScore = freq * float64(gpuMilliLeftTotal)
+		}
+		f = append(f, fragScore{freq: freq, gpuFragScore: gpuScore})
+	}
+	sort.Sort(f)
+	water := 0.5
+	realScore := 0.0
+	total := 0.0
+	for _, score := range f {
+		total += score.freq
+		if total > water {
+			break
+		}
+		realScore += score.freq * score.gpuFragScore
+	}
+	return realScore
 }
 
 func GetGpuFragMilliByNodeResAndPodRes(nodeRes simontype.NodeResource, podRes simontype.PodResource) int64 {
@@ -385,18 +531,27 @@ func GetTypicalPods(allPods []*v1.Pod, config v1alpha1.TypicalPodsConfig) simont
 		podGpuCntMap[v] = 0
 	}
 	var total float64 = 0
+
+	// // 避免统计过多
+	if len(allPods) > 10000 {
+		allPods = allPods[:10000]
+	}
 	for _, pod := range allPods {
 		tgtPodRes := GetPodResource(pod)
+		// 不处理纯 CPU pod
 		if !config.IsInvolvedCpuPods && tgtPodRes.GpuNumber == 0 {
 			continue
 		}
 
+		// 默认权重计数为1
 		var weightedCnt float64 = 1
 		if config.GpuResWeight > 0 {
 			if tgtPodRes.MilliGpu == gpushareutils.MILLI {
 				weightedCnt = 1 + float64(tgtPodRes.GpuNumber)*config.GpuResWeight
 			}
 		}
+
+		// 如果出现过增加计数
 		if cnt, ok := tgtPodResCntMap[tgtPodRes]; ok {
 			tgtPodResCntMap[tgtPodRes] = cnt + weightedCnt
 		} else {
@@ -404,7 +559,9 @@ func GetTypicalPods(allPods []*v1.Pod, config v1alpha1.TypicalPodsConfig) simont
 		}
 		total += weightedCnt
 
+		// 对不同数量的GPU计数
 		switch tgtPodRes.GpuNumber {
+		// var GpuNumTypeList = []string{"PureCpu", "ShareGpu", "OneGpu", "TwoGpu", "FourGpu", "EightGpu", "Others"}
 		case 0:
 			podGpuCntMap[GpuNumTypeList[0]] += 1 // CPU
 		case 1:
@@ -430,6 +587,8 @@ func GetTypicalPods(allPods []*v1.Pod, config v1alpha1.TypicalPodsConfig) simont
 		log.Infof("  %s Pods: %d (%.2f%%)\n", k, podGpuCntMap[k], 100.0*float64(podGpuCntMap[k])/total)
 	}
 	log.Infof("Num of Total Pod Sepc: %d\n", len(tgtPodList))
+
+	// 计算前k个是典型的
 	var expectedNumPods float64 = 0
 	if config.PodPopularityThreshold > 0 {
 		expectedNumPods = float64(config.PodPopularityThreshold) * total / 100.0
@@ -461,6 +620,7 @@ func GetTypicalPods(allPods []*v1.Pod, config v1alpha1.TypicalPodsConfig) simont
 	if i >= len(tgtPodList) {
 		return tgtPodList
 	} else {
+		// 重新归一化
 		outPodList := tgtPodList[:i] // chopping at i-th pods
 		// normalize Percentage to 0.0 - 1.0 after chopping i-th pods
 		var cumRatioPct float64
@@ -475,6 +635,78 @@ func GetTypicalPods(allPods []*v1.Pod, config v1alpha1.TypicalPodsConfig) simont
 	}
 }
 
+func GetTypicalPodsByTime(allPods []*v1.Pod, config v1alpha1.TypicalPodsConfig) simontype.TargetPodList {
+	tgtPodResCntMap := map[simontype.PodResource]float64{}
+	// // 避免统计过多
+	if len(allPods) > 10000 {
+		allPods = allPods[:10000]
+	}
+	var allTime float64
+	for _, pod := range allPods {
+		tgtPodRes := GetPodResource(pod)
+		tgtTime := GetPodResourceWithTime(pod)
+		// 不处理纯 CPU pod
+		if !config.IsInvolvedCpuPods && tgtPodRes.GpuNumber == 0 {
+			continue
+		}
+
+		// tgtPodResCntMap[tgtPodRes] += math.Log2(float64(tgtTime.EndTime - tgtTime.StartTime))
+		tgtPodResCntMap[tgtPodRes] += float64(tgtTime.EndTime - tgtTime.StartTime)
+
+		allTime += float64(tgtTime.EndTime - tgtTime.StartTime)
+	}
+
+	tgtPodList := SortTargetPodInDecreasingCount(tgtPodResCntMap)
+	log.Infof("Time of Total Pod Sepc: %d\n", len(tgtPodList))
+
+	// 计算前k个是典型的
+	var expectedTimePods float64 = 0
+	if config.PodPopularityThreshold > 0 {
+		expectedTimePods = float64(config.PodPopularityThreshold) * allTime / 100.0
+	} else {
+		expectedTimePods = float64(simontype.DefaultTypicalPodPopularityThreshold) * allTime / 100.0
+	}
+	var i, podResNum int
+	var cumTimePods float64 = 0
+	for cumTimePods < expectedTimePods {
+		if config.PodIncreaseStep > 0 {
+			podResNum += config.PodIncreaseStep
+		} else {
+			podResNum += simontype.DefaultTypicalPodIncreaseStep
+		}
+		for i < podResNum && i < len(tgtPodList) {
+			timePods := tgtPodList[i].Percentage
+			cumTimePods += timePods
+			tgtPodList[i].Percentage = tgtPodList[i].Percentage / allTime // normalized to 0.0-1.0 (100%)
+			ratioPct := 100 * tgtPodList[i].Percentage
+			cumRatioPct := 100 * cumTimePods / allTime
+			log.Infof("[%d] %s: %.0f (%.2f%%, cumsum: %.2f%%)\n", i, tgtPodList[i].TargetPodResource.Repr(), timePods, ratioPct, cumRatioPct)
+			i += 1
+		}
+	}
+
+	log.Infof("Count top %d pod resource spec as typical ones, accounting for %.2f%% of all pods\n", i, 100.0*cumTimePods/allTime)
+	log.Infoln()
+
+	if i >= len(tgtPodList) {
+		return tgtPodList
+	} else {
+		// 重新归一化
+		outPodList := tgtPodList[:i] // chopping at i-th pods
+		// normalize Percentage to 0.0 - 1.0 after chopping i-th pods
+		var cumRatioPct float64
+		for j := 0; j < i; j++ {
+			outPodList[j].Percentage /= cumTimePods / allTime
+			cumRatioPct += outPodList[j].Percentage
+		}
+		if math.Abs(cumRatioPct-1) > 1e-3 {
+			log.Errorf("Renormalization fails (%.4f != 1.0): %v\n", cumRatioPct, outPodList)
+		}
+		return outPodList
+	}
+}
+
+// 参考论文图4
 func GetSkylinePods(allPods []*v1.Pod) (skylinePods simontype.SkylinePodList) {
 	skylinePods = make([]simontype.PodResource, 0)
 	podResList := make([]simontype.PodResource, 0)

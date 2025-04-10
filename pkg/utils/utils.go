@@ -43,7 +43,6 @@ import (
 	localutils "github.com/alibaba/open-local/pkg/utils"
 	simontype "github.com/hkust-adsl/kubernetes-scheduler-simulator/pkg/type"
 	gpusharecache "github.com/hkust-adsl/kubernetes-scheduler-simulator/pkg/type/open-gpu-share/cache"
-	"github.com/hkust-adsl/kubernetes-scheduler-simulator/pkg/type/open-gpu-share/utils"
 	gpushareutils "github.com/hkust-adsl/kubernetes-scheduler-simulator/pkg/type/open-gpu-share/utils"
 )
 
@@ -994,6 +993,22 @@ func IsNodeAccessibleToPodByType(nodeGpuType string, podGpuType string) bool {
 	}
 }
 
+func GetPodResourceWithTime(pod *corev1.Pod) simontype.PodResWithTime {
+	podRes := GetPodResource(pod)
+
+	planTime := gpushareutils.GetPlanTimeFromPodAnnotation(pod)
+	start := gpushareutils.GetStartTimeFromPodAnnotation(pod)
+	end := gpushareutils.GetEndTimeFromPodAnnotation(pod)
+
+	tgtPodRes := simontype.PodResWithTime{
+		PodRes:    podRes,
+		PlanTime:  int(planTime),
+		StartTime: int(start),
+		EndTime:   int(end),
+	}
+	return tgtPodRes
+}
+
 func GetPodResource(pod *corev1.Pod) simontype.PodResource {
 	gpuNumber := gpushareutils.GetGpuCountFromPodAnnotation(pod)
 	gpuMilli := gpushareutils.GetGpuMilliFromPodAnnotation(pod)
@@ -1015,6 +1030,7 @@ func GetPodResource(pod *corev1.Pod) simontype.PodResource {
 	return tgtPodRes
 }
 
+// 节点的资源和占用分布
 func GetNodeResourceMap(nodeStatus []simontype.NodeStatus) map[string]simontype.NodeResource {
 	nodeResMap := make(map[string]simontype.NodeResource)
 	for _, ns := range nodeStatus {
@@ -1060,12 +1076,41 @@ func GetNodeResourceViaNodeInfo(nodeInfo *framework.NodeInfo) (nodeRes *simontyp
 	}
 }
 
+func GetNodeResourceViaNode(nodeInfo *framework.NodeInfo, node *corev1.Node) (nodeRes *simontype.NodeResource) {
+	milliCpuLeft := node.Status.Allocatable.Cpu().MilliValue()
+	nodeGpuAffinity := map[string]int{}
+	for i := 0; i < len(nodeInfo.Pods); i++ {
+		p := nodeInfo.Pods[i].Pod
+		milliCpuLeft -= p.Spec.Containers[0].Resources.Requests.Cpu().MilliValue()
+		affinity := gpushareutils.GetGpuAffinityFromPodAnnotation(p)
+		if affinity != gpushareutils.NoGpuTag {
+			nodeGpuAffinity[affinity] += 1
+		}
+	}
+
+	return &simontype.NodeResource{
+		NodeName:         node.Name,
+		MilliCpuLeft:     milliCpuLeft,
+		MilliCpuCapacity: node.Status.Allocatable.Cpu().MilliValue(),
+		MilliGpuLeftList: getGpuMilliLeftListOnNode(node),
+		GpuNumber:        gpushareutils.GetGpuCountOfNode(node),
+		GpuType:          gpushareutils.GetGpuModelOfNode(node),
+		GpuAffinity:      nodeGpuAffinity,
+	}
+}
+
 func GetNodeResourceViaHandleAndName(handle framework.Handle, nodeName string) (nodeRes *simontype.NodeResource) {
 	nodeInfo, err := handle.SnapshotSharedLister().NodeInfos().Get(nodeName)
 	if err != nil {
 		return nil
 	}
-	return GetNodeResourceViaNodeInfo(nodeInfo)
+	// return GetNodeResourceViaNodeInfo(nodeInfo)
+
+	node, err := handle.ClientSet().CoreV1().Nodes().Get(context.Background(), nodeName, metav1.GetOptions{})
+	if err != nil {
+		return nil
+	}
+	return GetNodeResourceViaNode(nodeInfo, node)
 }
 
 func GetNodeResourceViaPodList(podList []*corev1.Pod, node *corev1.Node) (nodeRes *simontype.NodeResource) {
@@ -1111,7 +1156,7 @@ func GetNodeResourceAndPodResourceViaHandle(p *corev1.Pod, nodeName string, hand
 
 func getGpuMilliLeftListOnNode(node *corev1.Node) []int64 {
 	// ignore non-gpu node
-	if !utils.IsGpuSharingNode(node) {
+	if !gpushareutils.IsGpuSharingNode(node) {
 		return nil
 	}
 
@@ -1285,7 +1330,7 @@ func GenerateSchedulingMatchGroups(nodeRes simontype.NodeResource, podRes simont
 					nodeCapacity = []float64{float64(nodeRes.MilliCpuCapacity)}
 					nodeGpuResourceList := nodeRes.ToFormalizedGpuResourceList()
 					for i := 0; i < len(nodeGpuResourceList); i++ {
-						nodeCapacity = append(nodeCapacity, float64(nodeRes.GpuNumber*utils.MILLI))
+						nodeCapacity = append(nodeCapacity, float64(nodeRes.GpuNumber*gpushareutils.MILLI))
 					}
 				} else {
 					nodeCapacity = []float64{float64(nodeRes.MilliCpuCapacity), float64(nodeRes.GpuNumber * gpushareutils.MILLI)}
@@ -1308,13 +1353,13 @@ func GenerateSchedulingMatchGroups(nodeRes simontype.NodeResource, podRes simont
 			} else if normMethod == simontype.NormByMax {
 				var maxNodeCapacity []float64
 				if gpuDimExtMethod == simontype.ExtGpuDim {
-					maxNodeCapacity = []float64{float64(utils.MaxSpecCpu)}
+					maxNodeCapacity = []float64{float64(gpushareutils.MaxSpecCpu)}
 					nodeGpuResourceList := nodeRes.ToFormalizedGpuResourceList()
 					for i := 0; i < len(nodeGpuResourceList); i++ {
-						maxNodeCapacity = append(maxNodeCapacity, float64(utils.MaxSpecGpu))
+						maxNodeCapacity = append(maxNodeCapacity, float64(gpushareutils.MaxSpecGpu))
 					}
 				} else {
-					maxNodeCapacity = []float64{float64(utils.MaxSpecCpu), float64(utils.MaxSpecGpu)}
+					maxNodeCapacity = []float64{float64(gpushareutils.MaxSpecCpu), float64(gpushareutils.MaxSpecGpu)}
 				}
 				matchGroup.NodeResourceVec = NormalizeVector(matchGroup.NodeResourceVec, maxNodeCapacity)
 				matchGroup.PodResourceVec = NormalizeVector(matchGroup.PodResourceVec, maxNodeCapacity)

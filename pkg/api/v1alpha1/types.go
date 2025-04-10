@@ -8,6 +8,7 @@ type AppInfo struct {
 
 type Cluster struct {
 	CustomCluster string `json:"customConfig,omitempty"`
+	PodCluster    string `json:"podConfig,omitempty"`
 	KubeConfig    string `json:"kubeConfig,omitempty"`
 }
 
